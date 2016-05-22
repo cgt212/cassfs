@@ -3,8 +3,9 @@ package main
 import "fmt"
 import "syscall"
 import "time"
+import "github.com/gocql/gocql"
 import "github.com/hanwen/go-fuse/fuse"
-//import "github.com/hanwen/go-fuse/fuse/nodefs"
+import "github.com/hanwen/go-fuse/fuse/nodefs"
 import "github.com/hanwen/go-fuse/fuse/pathfs"
 
 type CassFsOptions struct {
@@ -13,8 +14,15 @@ type CassFsOptions struct {
 
 type CassFs struct {
 	pathfs.FileSystem
-	store Cass
+	store *Cass
 	options *CassFsOptions
+}
+
+func NewCassFs(s *Cass, opts *CassFsOptions) *CassFs {
+	return &CassFs{
+		store:   s,
+		options: opts,
+	}
 }
 
 // This is the start of the FS Interface implementation
@@ -27,8 +35,12 @@ func (c *CassFs) Link(orig string, newName string, context *fuse.Context) fuse.S
 }
 
 func (c *CassFs) Rmdir(path string, context *fuse.Context) fuse.Status {
-	f := c.getEntry(path)
-	if !f.attr.IsDir() {
+	data, err := c.store.GetFiledata(path)
+	if err != nil {
+		fmt.Printf("Unable to get information for %s: %s\n", path, err)
+		return fuse.EIO
+	}
+	if !data.Metadata.Attr.IsDir() {
 		return fuse.Status(syscall.ENOTDIR)
 	}
 
@@ -36,7 +48,7 @@ func (c *CassFs) Rmdir(path string, context *fuse.Context) fuse.Status {
 	if len(dirlist) > 0 {
 		return fuse.Status(syscall.ENOTEMPTY)
 	}
-	err = c.store.DeleteEntry(path)
+	err = c.store.DeleteFile(path)
 	if err != nil {
 		return -1
 	}
@@ -44,7 +56,7 @@ func (c *CassFs) Rmdir(path string, context *fuse.Context) fuse.Status {
 }
 
 func (c *CassFs) Mkdir(path string, mode uint32, context *fuse.Context) fuse.Status {
-	metadata, err := c.store.GetFiledata(path)
+	_, err := c.store.GetFiledata(path)
 	if err == nil {
 		return fuse.Status(syscall.EEXIST)
 	}
@@ -110,11 +122,21 @@ func (c *CassFs) Readlink(name string, context *fuse.Context) (string, fuse.Stat
 }
 
 //This needs to be fixed
-func (c *CassFs) Create(name string, flags uint32, mode uint32, context *fuse.Context) fuse.Status {
-	meta, err := c.store.GetFiledata(name)
+func (c *CassFs) Create(name string, flags uint32, mode uint32, context *fuse.Context) (nodefs.File, fuse.Status) {
+	_, err := c.store.GetFiledata(name)
 	if err != nil {
-		fmt.Printf("could not get file information for: %s\n", name)
-		return fuse.EIO
+		if err == gocql.ErrNotFound {
+			attr := fuse.Attr{
+				Mode: fuse.S_IFLNK | mode,
+			}
+			c.store.CreateFile(name, &attr, []byte{})
+			fd := NewFileData(name, []byte{}, []byte{})
+			fd.Attr = &attr
+			return NewFileHandle(fd), fuse.OK
+		} else {
+			fmt.Printf("could not get file information for: %s\n", name)
+			return nil, fuse.EIO
+		}
 	}
-	return fuse.OK
+	return nil, fuse.Status(syscall.EEXIST)
 }
