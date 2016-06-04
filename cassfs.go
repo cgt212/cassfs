@@ -25,6 +25,66 @@ func NewCassFs(s *Cass, opts *CassFsOptions) *CassFs {
 	}
 }
 
+func (c *CassFs) OnMount(nodefs *pathfs.PathNodeFs) {
+}
+
+func (c *CassFs) OnUnmount() {
+}
+
+func (c *CassFs) StatFs(name string) *fuse.StatfsOut {
+	fcount, err := c.store.GetFileCount()
+	if err != nil {
+		return nil
+	}
+	return &fuse.StatfsOut{
+		Files: fcount,
+		Ffree: fcount * 2,
+	}
+}
+
+func (c *CassFs) Access(name string, mode uint32, context *fuse.Context) fuse.Status {
+	//For now we are just going to allow all access
+	return fuse.OK
+}
+
+func (c *CassFs) OpenDir(name string, context *fuse.Context) ([]fuse.DirEntry, fuse.Status) {
+	fmt.Printf("Opening Dir (%s)...\n", name)
+	res, err := c.store.OpenDir(name)
+	if err != nil {
+		if err == gocql.ErrNotFound {
+			fmt.Printf("The dir wasn't found, returning NOENT")
+			return nil, fuse.ENOENT
+		}
+		fmt.Printf("There was some kind of other error")
+		return nil, fuse.EIO
+	}
+	fmt.Printf("All good, returning what I've got\n")
+	return res, fuse.OK
+}
+
+func (c *CassFs) GetAttr(name string, context *fuse.Context) (*fuse.Attr, fuse.Status) {
+	fmt.Printf("Trying to get attribute of %s...\n", name)
+	if name == "" {
+		fmt.Printf("Returning maunual root Attr\n")
+		return &fuse.Attr{
+			Mode: fuse.S_IFDIR,
+			Owner: context.Owner,
+		}, fuse.OK
+	}
+	meta, err := c.store.GetFiledata(name)
+	if err != nil {
+		fmt.Printf("There was a lookup error...")
+		if err == gocql.ErrNotFound {
+			fmt.Printf("File not found\n")
+			return nil, fuse.ENOENT
+		}
+		fmt.Printf("I/O Error...\n")
+		return nil, fuse.EIO
+	}
+	fmt.Printf("Should be no error\n")
+	return meta.Metadata.Attr, fuse.OK
+}
+
 // This is the start of the FS Interface implementation
 func (c *CassFs) Link(orig string, newName string, context *fuse.Context) fuse.Status {
 	err := c.store.CopyFile(orig, newName)
@@ -121,22 +181,69 @@ func (c *CassFs) Readlink(name string, context *fuse.Context) (string, fuse.Stat
 	return string(meta.Hash), fuse.OK
 }
 
+func (c *CassFs) FlushFile(fd *CassFileData) error {
+	return c.store.UpdateFile(fd)
+}
+
+func (c *CassFs) Open(name string, flags uint32, context *fuse.Context) (nodefs.File, fuse.Status) {
+	mdata, err := c.store.GetFiledata(name)
+	if err != nil {
+		if err == gocql.ErrNotFound {
+			return nil, fuse.ENOENT
+		}
+		return nil, fuse.EIO
+	}
+	data, err := c.store.Read(mdata.Hash)
+	if err != nil {
+		return nil, fuse.EIO
+	}
+	fd := NewFileData(name, mdata.Hash, data)
+	fd.Attr = mdata.Metadata.Attr
+	fh := NewFileHandle(fd)
+	fh.fileData.Fs = c
+	return fh, fuse.OK
+}
+
 //This needs to be fixed
 func (c *CassFs) Create(name string, flags uint32, mode uint32, context *fuse.Context) (nodefs.File, fuse.Status) {
+	fmt.Printf("Should be creating file (%s)\n", name)
 	_, err := c.store.GetFiledata(name)
 	if err != nil {
 		if err == gocql.ErrNotFound {
 			attr := fuse.Attr{
-				Mode: fuse.S_IFLNK | mode,
+				Mode: fuse.S_IFREG | mode,
 			}
-			c.store.CreateFile(name, &attr, []byte{})
+			err = c.store.CreateFile(name, &attr, []byte{})
+			if err != nil {
+				fmt.Printf("Error creating file: %s\n", err)
+				return nil, fuse.EIO
+			}
 			fd := NewFileData(name, []byte{}, []byte{})
 			fd.Attr = &attr
-			return NewFileHandle(fd), fuse.OK
+			fh := NewFileHandle(fd)
+			fh.fileData.Fs = c
+			return fh, fuse.OK
 		} else {
 			fmt.Printf("could not get file information for: %s\n", name)
 			return nil, fuse.EIO
 		}
 	}
+	fmt.Printf("The file exists\n")
 	return nil, fuse.Status(syscall.EEXIST)
+}
+
+func (c *CassFs) GetXAttr(name string, attribute string, context *fuse.Context) ([]byte, fuse.Status) {
+	return []byte{}, fuse.OK
+}
+
+func (c *CassFs) RemoveXAttr(name string, attr string, context *fuse.Context) fuse.Status {
+	return fuse.OK
+}
+
+func (c *CassFs) SetXAttr(name string, attr string, data []byte, flags int, context *fuse.Context) fuse.Status {
+	return fuse.OK
+}
+
+func (c *CassFs) ListXAttr(name string, context *fuse.Context) ([]string, fuse.Status) {
+	return []string{}, fuse.OK
 }
