@@ -4,9 +4,11 @@ import "flag"
 import "fmt"
 import "log"
 import "os"
+import "syscall"
 import "time"
 
 import (
+	"github.com/hanwen/go-fuse/fuse"
 	"github.com/hanwen/go-fuse/fuse/nodefs"
 	"github.com/hanwen/go-fuse/fuse/pathfs"
 )
@@ -30,15 +32,35 @@ func main() {
 	mountDir := os.Args[1]
 	fmt.Printf("Should be mounting to: %s (%s)\n", mountDir, flag.Arg(0))
 
+	dinfo, err := os.Stat(mountDir)
+	if err != nil {
+		fmt.Printf("Error opening %s: %s\n", mountDir, err)
+		os.Exit(1)
+	}
+	owner := fuse.Owner{
+		Uid:      dinfo.Sys().(*syscall.Stat_t).Uid,
+		Gid:      dinfo.Sys().(*syscall.Stat_t).Gid,
+	}
+
+	fmt.Printf("Using %d:%d as owner\n", owner.Uid, owner.Gid)
+
 	c := NewDefaultCass()
 	c.Host = *server
 	c.Keyspace = *keyspace
-	err := c.Init()
+	err = c.Init()
 	if err != nil {
 		fmt.Printf("Could not initialize cluster connection: %s\n", err)
 		os.Exit(1)
 	}
-	fs := NewCassFs(c, nil)
+
+	mode := uint32(dinfo.Mode())
+
+	opts := &CassFsOptions{
+		Owner: owner,
+		Mode:  mode,
+	}
+
+	fs := NewCassFs(c, opts)
 	nodeFs := pathfs.NewPathNodeFs(fs, &pathfs.PathNodeFsOptions{ClientInodes: true})
 	mOpts := nodefs.Options{
 		EntryTimeout:    time.Duration(*entry_ttl * float64(time.Second)),

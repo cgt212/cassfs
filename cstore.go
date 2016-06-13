@@ -66,7 +66,7 @@ func splitPath(path string) (string, string) {
 	if strings.HasSuffix(path, "/") {
 		_path = path[:len(path)-1]
 	}
-	idx := strings.LastIndexByte(_path, "/"[0])
+	idx := strings.LastIndex(_path, "/")
 	if idx > 0 {
 		parent := _path[:idx]
 		child := _path[idx+1:len(_path)]

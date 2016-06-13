@@ -9,6 +9,8 @@ import "github.com/hanwen/go-fuse/fuse/nodefs"
 import "github.com/hanwen/go-fuse/fuse/pathfs"
 
 type CassFsOptions struct {
+	Owner fuse.Owner
+	Mode  uint32
 	mount bool
 }
 
@@ -65,10 +67,12 @@ func (c *CassFs) OpenDir(name string, context *fuse.Context) ([]fuse.DirEntry, f
 func (c *CassFs) GetAttr(name string, context *fuse.Context) (*fuse.Attr, fuse.Status) {
 	fmt.Printf("Trying to get attribute of %s...\n", name)
 	if name == "" {
-		fmt.Printf("Returning maunual root Attr\n")
 		return &fuse.Attr{
-			Mode: fuse.S_IFDIR,
-			Owner: context.Owner,
+			Mode: fuse.S_IFDIR | c.options.Mode,
+			Owner: fuse.Owner{
+				Uid: c.options.Owner.Uid,
+				Gid: c.options.Owner.Gid,
+			},
 		}, fuse.OK
 	}
 	meta, err := c.store.GetFiledata(name)
