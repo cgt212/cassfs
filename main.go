@@ -21,6 +21,7 @@ func main() {
 	keyspace := flag.String("keyspace", "test", "Keyspace to use for the filesystem")
 	ownerId := flag.Int64("owner", 1, "ID of the FS owner")
 	env := flag.String("environment", "prod", "Environment to mount")
+	debug := flag.Bool("debug", false, "Turn on debugging")
 
 	//delcache_ttl := flag.Float64("deletion_cache_ttl", 5.0, "Deletion cache TTL in seconds.")
 	//branchcache_ttl := flag.Float64("branchcache_ttl", 5.0, "Branch cache TTL in seconds.")
@@ -32,8 +33,20 @@ func main() {
 		os.Exit(1)
 	}
 	mountDir := os.Args[1]
-	fmt.Printf("Should be mounting to: %s (%s)\n", mountDir, flag.Arg(0))
 
+	//Set cstore options relating to the Database
+	c := NewDefaultCass()
+	c.Host = *server
+	c.Keyspace = *keyspace
+	c.OwnerId = *ownerId
+	c.Environment = *env
+	err := c.Init()
+	if err != nil {
+		fmt.Printf("Could not initialize cluster connection: %s\n", err)
+		os.Exit(1)
+	}
+
+	//The stat of the directory on the file system is being used to create the Owner and Permissions of the directory
 	dinfo, err := os.Stat(mountDir)
 	if err != nil {
 		fmt.Printf("Error opening %s: %s\n", mountDir, err)
@@ -43,21 +56,6 @@ func main() {
 		Uid:      dinfo.Sys().(*syscall.Stat_t).Uid,
 		Gid:      dinfo.Sys().(*syscall.Stat_t).Gid,
 	}
-
-	fmt.Printf("Using %d:%d as owner\n", owner.Uid, owner.Gid)
-
-	//Set cstore options relating to the Database
-	c := NewDefaultCass()
-	c.Host = *server
-	c.Keyspace = *keyspace
-	c.OwnerId = *ownerId
-	c.Environment = *env
-	err = c.Init()
-	if err != nil {
-		fmt.Printf("Could not initialize cluster connection: %s\n", err)
-		os.Exit(1)
-	}
-
 	mode := uint32(dinfo.Mode())
 
 	opts := &CassFsOptions{
@@ -66,6 +64,7 @@ func main() {
 	}
 
 	fs := NewCassFs(c, opts)
+	//This section is taken directly from the examples - not fully understood
 	nodeFs := pathfs.NewPathNodeFs(fs, &pathfs.PathNodeFsOptions{ClientInodes: true})
 	mOpts := nodefs.Options{
 		EntryTimeout:    time.Duration(*entry_ttl * float64(time.Second)),
@@ -78,6 +77,6 @@ func main() {
 		log.Fatal("Mount fail:", err)
 	}
 
-	mountState.SetDebug(true)
+	mountState.SetDebug(*debug)
 	mountState.Serve()
 }
