@@ -6,22 +6,13 @@ import (
 	"crypto/sha512"
 	"encoding/json"
 	"fmt"
-	"io"
-	"os"
 	"strings"
 )
 
 import "github.com/gocql/gocql"
 
+//Setting the blocksize to 1M for now
 const BLOBSIZE = 1024 * 1024
-
-type RemoteFile struct {
-	Parent   string
-	Name     string
-	Metadata string
-	Hash     []byte
-	Dirty    bool
-}
 
 type CassMetadata struct {
 	Attr  *fuse.Attr
@@ -55,12 +46,14 @@ func NewDefaultCass() *Cass {
 	}
 }
 
+//ShaSum calculates the SHA512 of a byte array
 func ShaSum(data []byte) []byte {
 	hash512 := sha512.New()
 	hash512.Write(data)
 	return hash512.Sum(nil)
 }
 
+//splitPath accepts a string argument that it will split into a directory and filename
 func splitPath(path string) (string, string) {
 	_path := path
 	if strings.HasSuffix(path, "/") {
@@ -78,10 +71,12 @@ func splitPath(path string) (string, string) {
 	return "/", _path
 }
 
+//SplitPath is a globally accessible version of splitPath
 func SplitPath(path string) (string, string) {
 	return splitPath(path)
 }
 
+//Init initializes the connection to the Cassandra server
 func (c *Cass) Init() error {
 	c.cluster = gocql.NewCluster(c.Host)
 	c.cluster.ProtoVersion = 4
@@ -96,14 +91,17 @@ func (c *Cass) Init() error {
 
 //These are the new rounds of functions on the storage
 
+//incrementDataRef updates the reference count on a data row when new files reference it
 func (c *Cass) incrementDataRef(hash []byte) error {
 	return c.session.Query("UPDATE fileref SET refs = refs + 1 WHERE hash = ?", hash).Exec()
 }
 
+//decrementDataRef updates the reference count on a data row when files that reference it are deleted or modified
 func (c *Cass) decrementDataRef(hash []byte) error {
 	return c.session.Query("UPDATE fileref SET refs = refs - 1 WHERE hash = ?", hash).Exec()
 }
 
+//GetFiledata looks up the file path in name and returns the Metadata or an error
 func (c *Cass) GetFiledata(name string) (*CassFsMetadata, error) {
 	var meta CassMetadata
 	var metajson, hash []byte
@@ -120,6 +118,7 @@ func (c *Cass) GetFiledata(name string) (*CassFsMetadata, error) {
 	return ret, nil
 }
 
+//CreateFile creates the file that will be a reference to a data row it will store the path, attributes and the hash
 func (c *Cass) CreateFile(name string, attr *fuse.Attr, hash []byte) error {
 	meta, err := json.Marshal(CassMetadata{
 		Attr:  attr,
@@ -133,6 +132,7 @@ func (c *Cass) CreateFile(name string, attr *fuse.Attr, hash []byte) error {
 	return c.session.Query("INSERT INTO filesystem (cust_id, environment, directory, name, hash, metadata) VALUES(?, ?, ?, ?, ?, ?)", c.OwnerId, c.Environment, dir, file, hash, meta).Consistency(gocql.One).Exec()
 }
 
+//UpdateFile Updates the attributes and data hash when a file changes
 func (c *Cass) UpdateFile(f *CassFileData) error {
 	parent, file := splitPath(f.Name)
 	hash, err := c.WriteFileData(f.Data)
@@ -163,20 +163,7 @@ func (c *Cass) UpdateFile(f *CassFileData) error {
 	return nil
 }
 
-func (c *Cass) GetFileHash(name string) ([]byte, error) {
-	var hash []byte
-	parent, file := splitPath(name)
-	err := c.session.Query("SELECT hash FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", c.OwnerId, c.Environment, parent, file).Consistency(gocql.One).Scan(&hash)
-	if err != nil {
-		return nil, err
-	}
-	return hash, nil
-}
-
-func (c *Cass) WriteBlock(hash []byte, location int, data []byte) error {
-	return c.session.Query("INSERT INTO filedata (hash, location, data) VALUES(?, ?, ?)", hash, location, data).Consistency(gocql.One).Exec()
-}
-
+//Read reads in the data for the hash blob and returns it as a byte array
 func (c *Cass) Read(hash []byte) ([]byte, error) {
 	var buffer, data []byte
 	var loc int
@@ -187,26 +174,7 @@ func (c *Cass) Read(hash []byte) ([]byte, error) {
 	return buffer, nil
 }
 
-func (c *Cass) insertNewFileInformation(file *RemoteFile) error {
-	return c.session.Query("INSERT INTO filesystem (cust_id, environment, directory, name, hash, metadata) VALUES(?, ?, ?, ?, ?)", c.OwnerId, c.Environment, file.Parent, file.Name, file.Hash, file.Metadata).Consistency(gocql.One).Exec()
-}
-
-func (c *Cass) updateFileInformation(file *RemoteFile) error {
-	return c.session.Query("UPDATE filesystem SET hash=?, metadata=? WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", file.Hash, file.Metadata, c.OwnerId, c.Environment, file.Parent, file.Name).Consistency(gocql.One).Exec()
-}
-
-func (c *Cass) Copy(orig string, newFile string) error {
-	data, err := c.GetFiledata(orig)
-	if err != nil {
-		return err
-	}
-	err = c.CreateFile(newFile, data.Metadata.Attr, data.Hash)
-	if err != nil {
-		return err
-	}
-	return c.incrementDataRef(data.Hash)
-}
-
+//DeleteFile removes a file from the filesystem and updates the reference count
 func (c *Cass) DeleteFile(name string) error {
 	var hash []byte
 	dir, file := splitPath(name)
@@ -218,6 +186,7 @@ func (c *Cass) DeleteFile(name string) error {
 	return c.decrementDataRef(hash)
 }
 
+//OpenDir returns the files stored in dir
 func (c *Cass) OpenDir(dir string) ([]fuse.DirEntry, error) {
 	var file_list []fuse.DirEntry
 	var meta []byte
@@ -244,6 +213,7 @@ func (c *Cass) OpenDir(dir string) ([]fuse.DirEntry, error) {
 	return file_list, nil
 }
 
+//CopyFile copies the file orig to newFile
 func (c *Cass) CopyFile(orig string, newFile string) error {
 	var hash []byte
 	var metadata CassMetadata
@@ -266,15 +236,7 @@ func (c *Cass) CopyFile(orig string, newFile string) error {
 	return nil
 }
 
-func (c *Cass) DeleteDirectory(path string) fuse.Status {
-	parent, dir := splitPath(path)
-	err := c.session.Query("DELETE FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", c.OwnerId, c.Environment, parent, dir).Consistency(gocql.One).Exec()
-	if err != nil {
-		return fuse.EIO
-	}
-	return fuse.OK
-}
-
+//WriteFileData writes the data passed in into the file data table in chunks of BLOBSIZE
 func (c *Cass) WriteFileData(data []byte) ([]byte, error) {
 	var h []byte
 	start := 0
@@ -313,96 +275,7 @@ func (c *Cass) WriteFileData(data []byte) ([]byte, error) {
 	return hash, nil
 }
 
-func (c *Cass) insertFileData(hash []byte, filename string) error {
-	buffer := make([]byte, BLOBSIZE)
-	location := 0
-	file, err := os.Open(filename)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	for {
-		cnt, err := file.Read(buffer)
-		if err != nil && err == io.EOF && cnt == 0 {
-			//EOF
-			return nil
-		}
-		err = c.session.Query("INSERT INTO filedata (hash, location, data) VALUES(?, ?, ?)", hash, location, buffer).Exec()
-		if err != nil {
-			fmt.Printf("Error inserting file blob: %s\n", err)
-			return err
-		}
-		location = location + cnt
-	}
-	return nil
-}
-
-func (c *Cass) AddFileData(filename string) ([]byte, error) {
-	var hash []byte
-	localHash := ShaSum([]byte(filename))
-	err := c.session.Query("SELECT hash FROM filedata WHERE hash = ?", localHash).Consistency(gocql.One).Scan(&hash)
-	if err != nil {
-		if err != gocql.ErrNotFound {
-			//Ther error was not a not found error, so there's a problem
-			return nil, err
-		}
-		err = c.insertFileData(localHash, filename)
-	}
-	//Getting here means that the data is in the DB
-	return localHash, err
-}
-
-func (c *Cass) GetFileInformation(filename string) (*RemoteFile, error) {
-	var metadata string
-	var hash []byte
-
-	directory, file := splitPath(filename)
-
-	err := c.session.Query("SELECT hash, metadata FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ? AND directory = ?", c.OwnerId, c.Environment, directory, file, directory).Consistency(gocql.One).Scan(&hash, &metadata)
-	if err != nil {
-		if err == gocql.ErrNotFound {
-			fmt.Printf("Query found nothing for file %s\n", filename)
-			ret := &RemoteFile{
-				Name:     filename,
-				Metadata: "",
-				Hash:     nil,
-				Dirty:    true,
-			}
-			return ret, nil
-		}
-		return nil, err
-	}
-
-	fmt.Printf("Found %s with hash %s and metadata \"%s\"\n", filename, hash, metadata)
-	ret := &RemoteFile{
-		Name:     filename,
-		Metadata: metadata,
-		Hash:     hash,
-		Dirty:    false,
-	}
-	return ret, nil
-}
-
-//func (c *Cass) GetFileData(filename string, hash []byte) error {
-//	var loc int64
-//	var data []byte
-//	if hash == nil {
-//		//No hash makes this a no-op
-//		return nil
-//	}
-//	iter := c.session.Query("SELECT location, data FROM filedata WHERE hash = ?", hash).Iter()
-//
-//	file = os.Create(filename)
-//	defer file.Close()
-//	for iter.Scan(&loc, &data) {
-//		cnt, err := os.WriteAt(data, loc)
-//		if err != nil {
-//			return err
-//		}
-//	}
-//	return nil
-//}
-
+//MakeDirectory creates a directory at path directory with attributes attr
 func (c *Cass) MakeDirectory(directory string, attr *fuse.Attr) error {
 	parent, child := splitPath(directory)
 
@@ -415,6 +288,7 @@ func (c *Cass) MakeDirectory(directory string, attr *fuse.Attr) error {
 	return c.session.Query("INSERT INTO filesystem (cust_id, environment, directory, name, hash, metadata) VALUES(?, ?, ?, ?, ?, ?)", c.OwnerId, c.Environment, parent, child, nil, meta).Consistency(gocql.One).Exec()
 }
 
+//GetFileCount returns the number of files in the environment
 func (c *Cass) GetFileCount() (uint64, error) {
 	var fcount uint64
 	err := c.session.Query("SELECT count(1) FROM filesystem WHERE cust_id = ? AND environment = ?", c.OwnerId, c.Environment).Consistency(gocql.One).Scan(&fcount)

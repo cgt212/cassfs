@@ -19,6 +19,8 @@ func main() {
 	negative_ttl := flag.Float64("negative_ttl", 1.0, "fuse negative entry cache TTL.")
 	server := flag.String("server", "localhost", "Cassandra server to connect to")
 	keyspace := flag.String("keyspace", "test", "Keyspace to use for the filesystem")
+	ownerId := flag.Int64("owner", 1, "ID of the FS owner")
+	env := flag.String("environment", "prod", "Environment to mount")
 
 	//delcache_ttl := flag.Float64("deletion_cache_ttl", 5.0, "Deletion cache TTL in seconds.")
 	//branchcache_ttl := flag.Float64("branchcache_ttl", 5.0, "Branch cache TTL in seconds.")
@@ -44,9 +46,12 @@ func main() {
 
 	fmt.Printf("Using %d:%d as owner\n", owner.Uid, owner.Gid)
 
+	//Set cstore options relating to the Database
 	c := NewDefaultCass()
 	c.Host = *server
 	c.Keyspace = *keyspace
+	c.OwnerId = *ownerId
+	c.Environment = *env
 	err = c.Init()
 	if err != nil {
 		fmt.Printf("Could not initialize cluster connection: %s\n", err)
