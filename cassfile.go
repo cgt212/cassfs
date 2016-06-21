@@ -21,7 +21,7 @@
 package main
 
 import "bytes"
-import "fmt"
+import "log"
 import "sync"
 import "sync/atomic"
 import "time"
@@ -103,7 +103,7 @@ func (c *CassFileHandle) Read(buf []byte, off int64) (fuse.ReadResult, fuse.Stat
 	if end > len(c.fileData.Data) {
 		end = len(c.fileData.Data)
 	}
-	fmt.Printf("FILE: Read getting %d bytes\n", end)
+	log.Printf("FILE: Read getting %d bytes\n", end)
 	return fuse.ReadResultData(c.fileData.Data[off:end]), fuse.OK
 }
 
@@ -126,7 +126,7 @@ func (c *CassFileHandle) Flush() fuse.Status {
 	}
 	err := c.fileData.Fs.FlushFile(c.fileData)
 	if err != nil {
-		fmt.Printf("Error updating file: %s\n", err)
+		log.Printf("Error updating file: %s\n", err)
 		return fuse.EIO
 	}
 	return fuse.OK

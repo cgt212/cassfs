@@ -25,7 +25,7 @@ import "github.com/hanwen/go-fuse/fuse"
 import (
 	"crypto/sha512"
 	"encoding/json"
-	"fmt"
+	"log"
 	"strings"
 )
 
@@ -145,7 +145,7 @@ func (c *Cass) CreateFile(name string, attr *fuse.Attr, hash []byte) error {
 		XAttr: nil,
 	})
 	if err != nil {
-		fmt.Printf("Encoding error on metadata: %s\n", err)
+		log.Printf("Encoding error on metadata: %s\n", err)
 		return err
 	}
 	dir, file := splitPath(name)
@@ -157,7 +157,7 @@ func (c *Cass) UpdateFile(f *CassFileData) error {
 	parent, file := splitPath(f.Name)
 	hash, err := c.WriteFileData(f.Data)
 	if err != nil {
-		fmt.Printf("Error writing Data: %s\n", err)
+		log.Printf("Error writing Data: %s\n", err)
 		return err
 	}
 	old_hash := f.Hash
@@ -166,7 +166,7 @@ func (c *Cass) UpdateFile(f *CassFileData) error {
 		Attr: f.Attr,
 	})
 	if err != nil {
-		fmt.Printf("Encoding error: %s\n", err)
+		log.Printf("Encoding error: %s\n", err)
 		return err
 	}
 	err = c.session.Query("UPDATE filesystem SET hash=?, metadata=? WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", f.Hash, meta, c.OwnerId, c.Environment, parent, file).Consistency(gocql.One).Exec()
@@ -214,16 +214,16 @@ func (c *Cass) OpenDir(dir string) ([]fuse.DirEntry, error) {
 	if dir == "" {
 		dir = "/"
 	}
-	fmt.Printf("STORE: Opening Dir (%s)\n", dir)
+	log.Printf("STORE: Opening Dir (%s)\n", dir)
 	iter := c.session.Query("SELECT name, metadata FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ?", c.OwnerId, c.Environment, dir).Iter()
 	for iter.Scan(&file, &meta) {
 		finfo := &CassMetadata{}
 		err := json.Unmarshal(meta, finfo)
 		if err != nil {
-			fmt.Printf("Error decoding metadata for (%s): %s\n", file, err)
+			log.Printf("Error decoding metadata for (%s): %s\n", file, err)
 			continue
 		}
-		fmt.Printf("Appending %s to the directory list\n", file)
+		log.Printf("Appending %s to the directory list\n", file)
 		file_list = append(file_list, fuse.DirEntry{Mode: finfo.Attr.Mode | 0777, Name: file})
 	}
 	err := iter.Close();
@@ -265,7 +265,7 @@ func (c *Cass) WriteFileData(data []byte) ([]byte, error) {
 		end = len(data)
 	}
 	hash := ShaSum(data)
-	fmt.Printf("Writing %d bytes for file\n", len(data))
+	log.Printf("Writing %d bytes for file\n", len(data))
 	err := c.session.Query("SELECT hash FROM filedata WHERE hash = ?", hash).Consistency(gocql.One).Scan(&h)
 	if err == nil {
 		//The data is already in the DB
@@ -276,10 +276,10 @@ func (c *Cass) WriteFileData(data []byte) ([]byte, error) {
 		return nil, err
 	}
 	for {
-		fmt.Printf("Writing blocks from: %d to %d\n", start, end)
+		log.Printf("Writing blocks from: %d to %d\n", start, end)
 		err := c.session.Query("INSERT INTO filedata (hash, location, data) VALUES(?, ?, ?)", hash, start, data[start:end]).Exec()
 		if err != nil {
-			fmt.Printf("Error writing data: %s\n", err)
+			log.Printf("Error writing data: %s\n", err)
 			return nil, err
 		}
 		start += BLOBSIZE + 1
@@ -301,7 +301,7 @@ func (c *Cass) MakeDirectory(directory string, attr *fuse.Attr) error {
 
 	meta, err := json.Marshal(CassMetadata{Attr: attr})
 	if err != nil {
-		fmt.Printf("Encoding err: %s\n", err)
+		log.Printf("Encoding err: %s\n", err)
 		return err
 	}
 

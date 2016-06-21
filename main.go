@@ -21,7 +21,6 @@
 package main
 
 import "flag"
-import "fmt"
 import "log"
 import "os"
 import "syscall"
@@ -49,7 +48,7 @@ func main() {
 	flag.Parse()
 
 	if len(os.Args) < 2 {
-		fmt.Printf("%s requires one argument", os.Args[0])
+		log.Printf("%s requires one argument", os.Args[0])
 		os.Exit(1)
 	}
 	mountDir := os.Args[1]
@@ -62,14 +61,14 @@ func main() {
 	c.Environment = *env
 	err := c.Init()
 	if err != nil {
-		fmt.Printf("Could not initialize cluster connection: %s\n", err)
+		log.Printf("Could not initialize cluster connection: %s\n", err)
 		os.Exit(1)
 	}
 
 	//The stat of the directory on the file system is being used to create the Owner and Permissions of the directory
 	dinfo, err := os.Stat(mountDir)
 	if err != nil {
-		fmt.Printf("Error opening %s: %s\n", mountDir, err)
+		log.Printf("Error opening %s: %s\n", mountDir, err)
 		os.Exit(1)
 	}
 	owner := fuse.Owner{

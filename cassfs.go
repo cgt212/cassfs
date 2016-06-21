@@ -21,7 +21,7 @@
 
 package main
 
-import "fmt"
+import "log"
 import "syscall"
 import "time"
 import "github.com/gocql/gocql"
@@ -71,22 +71,22 @@ func (c *CassFs) Access(name string, mode uint32, context *fuse.Context) fuse.St
 }
 
 func (c *CassFs) OpenDir(name string, context *fuse.Context) ([]fuse.DirEntry, fuse.Status) {
-	fmt.Printf("Opening Dir (%s)...\n", name)
+	log.Printf("Opening Dir (%s)...\n", name)
 	res, err := c.store.OpenDir(name)
 	if err != nil {
 		if err == gocql.ErrNotFound {
-			fmt.Printf("The dir wasn't found, returning NOENT")
+			log.Printf("The dir wasn't found, returning NOENT")
 			return nil, fuse.ENOENT
 		}
-		fmt.Printf("There was some kind of other error")
+		log.Printf("There was some kind of other error")
 		return nil, fuse.EIO
 	}
-	fmt.Printf("All good, returning what I've got\n")
+	log.Printf("All good, returning what I've got\n")
 	return res, fuse.OK
 }
 
 func (c *CassFs) GetAttr(name string, context *fuse.Context) (*fuse.Attr, fuse.Status) {
-	fmt.Printf("Trying to get attribute of %s...\n", name)
+	log.Printf("Trying to get attribute of %s...\n", name)
 	if name == "" {
 		return &fuse.Attr{
 			Mode: fuse.S_IFDIR | c.options.Mode,
@@ -98,15 +98,15 @@ func (c *CassFs) GetAttr(name string, context *fuse.Context) (*fuse.Attr, fuse.S
 	}
 	meta, err := c.store.GetFiledata(name)
 	if err != nil {
-		fmt.Printf("There was a lookup error...")
+		log.Printf("There was a lookup error...")
 		if err == gocql.ErrNotFound {
-			fmt.Printf("File not found\n")
+			log.Printf("File not found\n")
 			return nil, fuse.ENOENT
 		}
-		fmt.Printf("I/O Error...\n")
+		log.Printf("I/O Error...\n")
 		return nil, fuse.EIO
 	}
-	fmt.Printf("Should be no error\n")
+	log.Printf("Should be no error\n")
 	return meta.Metadata.Attr, fuse.OK
 }
 
@@ -122,7 +122,7 @@ func (c *CassFs) Link(orig string, newName string, context *fuse.Context) fuse.S
 func (c *CassFs) Rmdir(path string, context *fuse.Context) fuse.Status {
 	data, err := c.store.GetFiledata(path)
 	if err != nil {
-		fmt.Printf("Unable to get information for %s: %s\n", path, err)
+		log.Printf("Unable to get information for %s: %s\n", path, err)
 		return fuse.EIO
 	}
 	if !data.Metadata.Attr.IsDir() {
@@ -147,7 +147,7 @@ func (c *CassFs) Mkdir(path string, mode uint32, context *fuse.Context) fuse.Sta
 	}
 	err = c.store.MakeDirectory(path, &fuse.Attr{Mode: fuse.S_IFDIR | mode})
 	if err != nil {
-		fmt.Printf("There was an error making directory (%s): %s\n", path, err)
+		log.Printf("There was an error making directory (%s): %s\n", path, err)
 		return fuse.EIO
 	}
 	return fuse.OK
@@ -159,7 +159,7 @@ func (c *CassFs) Symlink(pointedTo string, linkName string, context *fuse.Contex
 	}
 	err := c.store.CreateFile(linkName, &attr, []byte(pointedTo))
 	if err != nil {
-		fmt.Printf("Error creating symlink (%s): %s\n", linkName, err)
+		log.Printf("Error creating symlink (%s): %s\n", linkName, err)
 		return fuse.EIO
 	}
 	return fuse.OK
@@ -181,7 +181,7 @@ func (c *CassFs) Chmod(name string, mode uint32, context *fuse.Context) fuse.Sta
 	filemode := 0777
 	meta, err := c.store.GetFiledata(name)
 	if err != nil {
-		fmt.Printf("Could not get metadata for file: %s\n", name)
+		log.Printf("Could not get metadata for file: %s\n", name)
 		return fuse.EIO
 	}
 	meta.Metadata.Attr.Mode = meta.Metadata.Attr.Mode | (mode & uint32(filemode))
@@ -200,7 +200,7 @@ func (c *CassFs) Unlink(name string, context *fuse.Context) fuse.Status {
 func (c *CassFs) Readlink(name string, context *fuse.Context) (string, fuse.Status) {
 	meta, err := c.store.GetFiledata(name)
 	if err != nil {
-		fmt.Printf("could not get metadata for: %s\n", name)
+		log.Printf("could not get metadata for: %s\n", name)
 		return "", fuse.EIO
 	}
 	return string(meta.Hash), fuse.OK
@@ -231,7 +231,7 @@ func (c *CassFs) Open(name string, flags uint32, context *fuse.Context) (nodefs.
 
 //This needs to be fixed
 func (c *CassFs) Create(name string, flags uint32, mode uint32, context *fuse.Context) (nodefs.File, fuse.Status) {
-	fmt.Printf("Should be creating file (%s)\n", name)
+	log.Printf("Should be creating file (%s)\n", name)
 	_, err := c.store.GetFiledata(name)
 	if err != nil {
 		if err == gocql.ErrNotFound {
@@ -240,7 +240,7 @@ func (c *CassFs) Create(name string, flags uint32, mode uint32, context *fuse.Co
 			}
 			err = c.store.CreateFile(name, &attr, []byte{})
 			if err != nil {
-				fmt.Printf("Error creating file: %s\n", err)
+				log.Printf("Error creating file: %s\n", err)
 				return nil, fuse.EIO
 			}
 			fd := NewFileData(name, []byte{}, []byte{})
@@ -249,11 +249,11 @@ func (c *CassFs) Create(name string, flags uint32, mode uint32, context *fuse.Co
 			fh.fileData.Fs = c
 			return fh, fuse.OK
 		} else {
-			fmt.Printf("could not get file information for: %s\n", name)
+			log.Printf("could not get file information for: %s\n", name)
 			return nil, fuse.EIO
 		}
 	}
-	fmt.Printf("The file exists\n")
+	log.Printf("The file exists\n")
 	return nil, fuse.Status(syscall.EEXIST)
 }
 
