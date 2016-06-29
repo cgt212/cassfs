@@ -1,0 +1,8 @@
+package: github.com/marshyski/cassfs
+import:
+- package: github.com/gocql/gocql
+- package: github.com/hanwen/go-fuse
+  subpackages:
+  - fuse
+  - fuse/nodefs
+  - fuse/pathfs
