@@ -21,13 +21,16 @@
 
 package main
 
-import "log"
-import "syscall"
-import "time"
-import "github.com/gocql/gocql"
-import "github.com/hanwen/go-fuse/fuse"
-import "github.com/hanwen/go-fuse/fuse/nodefs"
-import "github.com/hanwen/go-fuse/fuse/pathfs"
+import (
+	"log"
+	"syscall"
+	"time"
+
+	"github.com/gocql/gocql"
+	"github.com/hanwen/go-fuse/fuse"
+	"github.com/hanwen/go-fuse/fuse/nodefs"
+	"github.com/hanwen/go-fuse/fuse/pathfs"
+)
 
 type CassFsOptions struct {
 	Owner fuse.Owner
