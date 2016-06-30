@@ -30,6 +30,8 @@ import (
 	"github.com/hanwen/go-fuse/fuse"
 	"github.com/hanwen/go-fuse/fuse/nodefs"
 	"github.com/hanwen/go-fuse/fuse/pathfs"
+
+	"github.com/cgt212/cassfs/cass"
 )
 
 func main() {
@@ -49,7 +51,7 @@ func main() {
 	flag.Parse()
 
 	//Set cstore options relating to the Database
-	c := NewDefaultCass()
+	c := cass.NewDefaultCass()
 	c.Host = *server
 	c.Keyspace = *keyspace
 	c.OwnerId = *ownerId
@@ -72,12 +74,12 @@ func main() {
 	}
 	mode := uint32(dinfo.Mode())
 
-	opts := &CassFsOptions{
+	opts := &cass.CassFsOptions{
 		Owner: owner,
 		Mode:  mode,
 	}
 
-	fs := NewCassFs(c, opts)
+	fs := cass.NewCassFs(c, opts)
 	//This section is taken directly from the examples - not fully understood
 	nodeFs := pathfs.NewPathNodeFs(fs, &pathfs.PathNodeFsOptions{ClientInodes: true})
 	mOpts := nodefs.Options{
