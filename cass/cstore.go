@@ -150,7 +150,14 @@ func (c *Cass) CreateFile(name string, attr *fuse.Attr, hash []byte) error {
 		return err
 	}
 	dir, file := splitPath(name)
-	return c.session.Query("INSERT INTO filesystem (cust_id, environment, directory, name, hash, metadata) VALUES(?, ?, ?, ?, ?, ?)", c.OwnerId, c.Environment, dir, file, hash, meta).Consistency(gocql.One).Exec()
+	err = c.session.Query("INSERT INTO filesystem (cust_id, environment, directory, name, hash, metadata) VALUES(?, ?, ?, ?, ?, ?)", c.OwnerId, c.Environment, dir, file, hash, meta).Consistency(gocql.One).Exec()
+	if err != nil {
+		return err
+	}
+	if len(hash) > 0 {
+		err = c.incrementDataRef(hash)
+	}
+	return err
 }
 
 //UpdateFile Updates the attributes and data hash when a file changes
@@ -200,11 +207,17 @@ func (c *Cass) DeleteFile(name string) error {
 	var hash []byte
 	dir, file := splitPath(name)
 	err := c.session.Query("SELECT hash FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ? and name = ?", c.OwnerId, c.Environment, dir, file).Scan(&hash)
+	if err != nil {
+		return err
+	}
 	err = c.session.Query("DELETE FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ? and name = ?", c.OwnerId, c.Environment, dir, file).Exec()
 	if err != nil {
 		return err
 	}
-	return c.decrementDataRef(hash)
+	if len(hash) > 0 {
+		err = c.decrementDataRef(hash)
+	}
+	return err
 }
 
 //OpenDir returns the files stored in dir

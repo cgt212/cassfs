@@ -138,7 +138,10 @@ func (c *CassFs) Rmdir(path string, context *fuse.Context) fuse.Status {
 	}
 	err = c.store.DeleteFile(path)
 	if err != nil {
-		return -1
+		if err == gocql.ErrNotFound {
+			return fuse.ENOENT
+		}
+		return fuse.EIO
 	}
 	return 0
 }
