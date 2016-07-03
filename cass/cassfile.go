@@ -18,15 +18,18 @@
  *along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-package main
+package cass
 
-import "bytes"
-import "log"
-import "sync"
-import "sync/atomic"
-import "time"
-import "github.com/hanwen/go-fuse/fuse"
-import "github.com/hanwen/go-fuse/fuse/nodefs"
+import (
+	"bytes"
+	"log"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/hanwen/go-fuse/fuse"
+	"github.com/hanwen/go-fuse/fuse/nodefs"
+)
 
 type CassFileHandle struct {
 	at       int64

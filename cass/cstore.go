@@ -18,18 +18,19 @@
  *along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-package main
+package cass
 
-import "github.com/hanwen/go-fuse/fuse"
 
 import (
 	"crypto/sha512"
 	"encoding/json"
 	"log"
 	"strings"
+
+	"github.com/hanwen/go-fuse/fuse"
+	"github.com/gocql/gocql"
 )
 
-import "github.com/gocql/gocql"
 
 //Setting the blocksize to 1M for now
 const BLOBSIZE = 1024 * 1024
