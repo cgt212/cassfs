@@ -73,6 +73,18 @@ func (c *CassFs) Access(name string, mode uint32, context *fuse.Context) fuse.St
 	return fuse.OK
 }
 
+func (c *CassFs) Rename(oldName string, newName string, context *fuse.Context) fuse.Status {
+	_, status := c.GetAttr(oldName, context)
+	if status != fuse.OK {
+		return status
+	}
+	err := c.store.Rename(oldName, newName)
+	if err != nil {
+		return fuse.EIO
+	}
+	return fuse.OK
+}
+
 func (c *CassFs) OpenDir(name string, context *fuse.Context) ([]fuse.DirEntry, fuse.Status) {
 	log.Printf("Opening Dir (%s)...\n", name)
 	res, err := c.store.OpenDir(name)
@@ -106,7 +118,7 @@ func (c *CassFs) GetAttr(name string, context *fuse.Context) (*fuse.Attr, fuse.S
 			log.Printf("File not found\n")
 			return nil, fuse.ENOENT
 		}
-		log.Printf("I/O Error...\n")
+		log.Printf("I/O Error: %s\n", err)
 		return nil, fuse.EIO
 	}
 	log.Printf("Should be no error\n")
@@ -160,8 +172,11 @@ func (c *CassFs) Mkdir(path string, mode uint32, context *fuse.Context) fuse.Sta
 }
 
 func (c *CassFs) Symlink(pointedTo string, linkName string, context *fuse.Context) fuse.Status {
+	ctime := time.Now()
 	attr := fuse.Attr{
 		Mode: fuse.S_IFLNK | 0777,
+		Ctime: uint64(ctime.Unix()),
+		Ctimensec: uint32(ctime.Nanosecond()),
 	}
 	err := c.store.CreateFile(linkName, &attr, []byte(pointedTo))
 	if err != nil {
@@ -176,22 +191,59 @@ func (c *CassFs) Truncate(path string, size uint64, context *fuse.Context) fuse.
 }
 
 func (c *CassFs) Utimens(name string, atime *time.Time, mtime *time.Time, context *fuse.Context) fuse.Status {
-	return fuse.EINVAL
+	meta, err := c.store.GetFiledata(name)
+	if err != nil {
+		log.Printf("Error getting (%s) metadata: %s\n", name, err)
+		return fuse.EIO
+	}
+	meta.Metadata.Attr.Atime = uint64(atime.Unix())
+        meta.Metadata.Attr.Atimensec = uint32(atime.Nanosecond())
+        meta.Metadata.Attr.Mtime = uint64(mtime.Unix())
+        meta.Metadata.Attr.Mtimensec = uint32(mtime.Nanosecond())
+        err = c.store.WriteMetadata(name, meta.Metadata)
+        if err != nil {
+                log.Printf("Error updating file: %s\n", err)
+                return fuse.EIO
+        }
+	return fuse.OK
 }
 
 func (c *CassFs) Chown(name string, uid uint32, gid uint32, context *fuse.Context) fuse.Status {
-	return fuse.EINVAL
+	meta, err := c.store.GetFiledata(name)
+	if err != nil {
+		log.Printf("Error getting (%s) metadata: %s\n", name, err)
+		return fuse.EIO
+	}
+	log.Printf("Changing file (%s) owner from %d:%d to %d:%d\n", name, meta.Metadata.Attr.Owner.Uid, meta.Metadata.Attr.Owner.Gid, uid, gid)
+	if int32(uid) > 0 {
+		meta.Metadata.Attr.Owner.Uid = uid
+	}
+	if int32(gid) > 0 {
+		meta.Metadata.Attr.Owner.Gid = gid
+	}
+	err = c.store.WriteMetadata(name, meta.Metadata)
+	if err != nil {
+		log.Printf("Error writing (%s) metadata: %s\n", name, err)
+		return fuse.EIO
+	}
+	return fuse.OK
 }
 
 func (c *CassFs) Chmod(name string, mode uint32, context *fuse.Context) fuse.Status {
-	filemode := 0777
+	permMask := uint32(07777)
 	meta, err := c.store.GetFiledata(name)
 	if err != nil {
 		log.Printf("Could not get metadata for file: %s\n", name)
 		return fuse.EIO
 	}
-	meta.Metadata.Attr.Mode = meta.Metadata.Attr.Mode | (mode & uint32(filemode))
+	log.Printf("Changing file (%s) mode from %d to %d\n", name, meta.Metadata.Attr.Mode, mode)
+	meta.Metadata.Attr.Mode = (meta.Metadata.Attr.Mode &^ permMask) | mode
 	//There needs to be a set filedata function in the store, which there is not
+	err = c.store.WriteMetadata(name, meta.Metadata)
+	if err != nil {
+		log.Printf("Error writing (%s) metadata: %s\n", name, err)
+		return fuse.EIO
+	}
 	return fuse.OK
 }
 

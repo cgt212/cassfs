@@ -79,12 +79,13 @@ func (c *CassFileHandle) String() string {
 	return c.fileData.Name
 }
 
-func (c *CassFileHandle) Chmod(mod uint32) fuse.Status {
-	attr := c.fileData.Attr
-	old_mode := attr.Mode
-	attr.Mode = (attr.Mode & 07000) | mod
-	if attr.Mode != old_mode {
-		c.fileData.Dirty = true
+func (c *CassFileHandle) Chmod(mode uint32) fuse.Status {
+	permMask := uint32(07777)
+	c.fileData.Attr.Mode = (c.fileData.Attr.Mode &^ permMask) | mode
+	err := c.fileData.Fs.FlushFile(c.fileData)
+	if err != nil {
+		log.Printf("Error flushing file to data store: %s\n", err)
+		return fuse.EIO
 	}
 	return fuse.OK
 }
@@ -97,6 +98,10 @@ func (c *CassFileHandle) Chown(uid uint32, gid uint32) fuse.Status {
 	if c.fileData.Attr.Gid != gid {
 		c.fileData.Attr.Gid = gid
 		c.fileData.Dirty = true
+	}
+	err := c.fileData.Fs.FlushFile(c.fileData)
+	if err != nil {
+		return fuse.EIO
 	}
 	return fuse.OK
 }
@@ -181,8 +186,15 @@ func (c *CassFileHandle) Truncate(size uint64) fuse.Status {
 }
 
 func (c *CassFileHandle) Utimens(atime *time.Time, mtime *time.Time) fuse.Status {
+	c.fileData.Attr.Atime = uint64(atime.Unix())
 	c.fileData.Attr.Atimensec = uint32(atime.Nanosecond())
+	c.fileData.Attr.Mtime = uint64(mtime.Unix())
 	c.fileData.Attr.Mtimensec = uint32(mtime.Nanosecond())
+	err := c.fileData.Fs.FlushFile(c.fileData)
+	if err != nil {
+		log.Printf("Error updating file: %s\n", err)
+		return fuse.EIO
+	}
 	return fuse.OK
 
 }
