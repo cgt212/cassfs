@@ -22,8 +22,11 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"os"
+	"runtime/pprof"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -34,6 +37,29 @@ import (
 	"github.com/cgt212/cassfs/cass"
 )
 
+var bytePrefix = map[string]int{
+	"K": 1 << 10,
+	"M": 1 << 20,
+	"G": 1 << 30,
+}
+
+func parseCacheSize(size string) int64 {
+	exp, ok := bytePrefix[string(size[len(size)-1])]
+	if !ok {
+		str := fmt.Sprintf("Invalid Cache size %s", string(size[len(size)-1]))
+		panic(str)
+	}
+	count := string(size[:len(size)-1])
+	factor, err := strconv.Atoi(count)
+
+	if err != nil {
+		str := fmt.Sprintf("Error converting cache size to number: %s\n", err)
+		panic(str)
+	}
+
+	return int64(exp * factor)
+}
+
 func main() {
 
 	entry_ttl := flag.Float64("entry_ttl", 1.0, "fuse entry cache TTL.")
@@ -43,7 +69,9 @@ func main() {
 	ownerId := flag.Int64("owner", 1, "ID of the FS owner")
 	env := flag.String("environment", "prod", "Environment to mount")
 	debug := flag.Bool("debug", false, "Turn on debugging")
-        mount := flag.String("mount", "./", "Mount directory")
+	mount := flag.String("mount", "./", "Mount directory")
+	cache := flag.String("cache", "", "Size of the cache using (K,M,G) suffix")
+	profile := flag.String("profile", "", "Write CPU profile data to file")
 
 	//delcache_ttl := flag.Float64("deletion_cache_ttl", 5.0, "Deletion cache TTL in seconds.")
 	//branchcache_ttl := flag.Float64("branchcache_ttl", 5.0, "Branch cache TTL in seconds.")
@@ -56,6 +84,12 @@ func main() {
 	c.Keyspace = *keyspace
 	c.OwnerId = *ownerId
 	c.Environment = *env
+	if *cache != "" {
+		c.CacheSize = parseCacheSize(*cache)
+		c.CacheEnabled = true
+	} else {
+		c.CacheEnabled = false
+	}
 	err := c.Init()
 	if err != nil {
 		log.Println("Could not initialize cluster connection:", err)
@@ -91,6 +125,15 @@ func main() {
 	mountState, _, err := nodefs.MountRoot(*mount, nodeFs.Root(), &mOpts)
 	if err != nil {
 		log.Fatal("Mount fail:", err)
+	}
+
+	if *profile != "" {
+		f, err := os.Create(*profile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
 	}
 
 	mountState.SetDebug(*debug)

@@ -24,7 +24,6 @@ import (
 	"bytes"
 	"log"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/hanwen/go-fuse/fuse"
@@ -49,7 +48,9 @@ type CassFileData struct {
 }
 
 func NewFileHandle(f *CassFileData) *CassFileHandle {
-	atomic.AddInt32(&f.Refs, 1)
+	f.Lock()
+	f.Refs++
+	f.Unlock()
 	return &CassFileHandle{
 		at:       0,
 		closed:   false,
@@ -64,14 +65,15 @@ func NewEmptyFileData(path string) *CassFileData {
 	}
 }
 
-func NewFileData(path string, hash []byte, data []byte) *CassFileData {
+func NewFileData(path string, fs *CassFs, hash []byte, data []byte, attr *fuse.Attr) *CassFileData {
 	return &CassFileData{
 		Refs: 0,
+		Fs: fs,
 		Name: path,
 		Data: data,
 		Hash: hash,
 		Dirty: false,
-		Attr: nil,
+		Attr: attr,
 	}
 }
 
@@ -111,7 +113,6 @@ func (c *CassFileHandle) Read(buf []byte, off int64) (fuse.ReadResult, fuse.Stat
 	if end > len(c.fileData.Data) {
 		end = len(c.fileData.Data)
 	}
-	log.Printf("FILE: Read getting %d bytes\n", end)
 	return fuse.ReadResultData(c.fileData.Data[off:end]), fuse.OK
 }
 
@@ -145,6 +146,13 @@ func (c *CassFileHandle) Allocate(off uint64, size uint64, mode uint32) fuse.Sta
 }
 
 func (c *CassFileHandle) Release() {
+	c.fileData.Lock()
+	c.fileData.Refs--
+	c.fileData.Unlock()
+	if c.fileData.Refs == 0 {
+		c.fileData.Fs.Release(c.fileData.Name)
+	}
+	c.closed = true
 	return
 }
 

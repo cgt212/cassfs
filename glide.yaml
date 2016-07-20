@@ -1,6 +1,7 @@
-package: github.com/marshyski/cassfs
+package: github.com/cgt212/cassfs
 import:
 - package: github.com/gocql/gocql
+- package: github.com/golang/groupcache
 - package: github.com/hanwen/go-fuse
   subpackages:
   - fuse

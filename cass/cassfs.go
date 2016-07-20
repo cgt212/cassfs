@@ -23,6 +23,7 @@ package cass
 
 import (
 	"log"
+	"sync"
 	"syscall"
 	"time"
 
@@ -40,6 +41,8 @@ type CassFsOptions struct {
 
 type CassFs struct {
 	pathfs.FileSystem
+	cacheLock sync.RWMutex
+	fileCache map[string]*CassFileData
 	store *Cass
 	options *CassFsOptions
 }
@@ -48,6 +51,7 @@ func NewCassFs(s *Cass, opts *CassFsOptions) *CassFs {
 	return &CassFs{
 		store:   s,
 		options: opts,
+		fileCache: make(map[string]*CassFileData),
 	}
 }
 
@@ -86,22 +90,18 @@ func (c *CassFs) Rename(oldName string, newName string, context *fuse.Context) f
 }
 
 func (c *CassFs) OpenDir(name string, context *fuse.Context) ([]fuse.DirEntry, fuse.Status) {
-	log.Printf("Opening Dir (%s)...\n", name)
 	res, err := c.store.OpenDir(name)
 	if err != nil {
 		if err == gocql.ErrNotFound {
-			log.Printf("The dir wasn't found, returning NOENT")
 			return nil, fuse.ENOENT
 		}
 		log.Printf("There was some kind of other error")
 		return nil, fuse.EIO
 	}
-	log.Printf("All good, returning what I've got\n")
 	return res, fuse.OK
 }
 
 func (c *CassFs) GetAttr(name string, context *fuse.Context) (*fuse.Attr, fuse.Status) {
-	log.Printf("Trying to get attribute of %s...\n", name)
 	if name == "" {
 		return &fuse.Attr{
 			Mode: fuse.S_IFDIR | c.options.Mode,
@@ -113,15 +113,12 @@ func (c *CassFs) GetAttr(name string, context *fuse.Context) (*fuse.Attr, fuse.S
 	}
 	meta, err := c.store.GetFiledata(name)
 	if err != nil {
-		log.Printf("There was a lookup error...")
 		if err == gocql.ErrNotFound {
-			log.Printf("File not found\n")
 			return nil, fuse.ENOENT
 		}
 		log.Printf("I/O Error: %s\n", err)
 		return nil, fuse.EIO
 	}
-	log.Printf("Should be no error\n")
 	return meta.Metadata.Attr, fuse.OK
 }
 
@@ -214,7 +211,6 @@ func (c *CassFs) Chown(name string, uid uint32, gid uint32, context *fuse.Contex
 		log.Printf("Error getting (%s) metadata: %s\n", name, err)
 		return fuse.EIO
 	}
-	log.Printf("Changing file (%s) owner from %d:%d to %d:%d\n", name, meta.Metadata.Attr.Owner.Uid, meta.Metadata.Attr.Owner.Gid, uid, gid)
 	if int32(uid) > 0 {
 		meta.Metadata.Attr.Owner.Uid = uid
 	}
@@ -236,7 +232,6 @@ func (c *CassFs) Chmod(name string, mode uint32, context *fuse.Context) fuse.Sta
 		log.Printf("Could not get metadata for file: %s\n", name)
 		return fuse.EIO
 	}
-	log.Printf("Changing file (%s) mode from %d to %d\n", name, meta.Metadata.Attr.Mode, mode)
 	meta.Metadata.Attr.Mode = (meta.Metadata.Attr.Mode &^ permMask) | mode
 	//There needs to be a set filedata function in the store, which there is not
 	err = c.store.WriteMetadata(name, meta.Metadata)
@@ -269,6 +264,13 @@ func (c *CassFs) FlushFile(fd *CassFileData) error {
 }
 
 func (c *CassFs) Open(name string, flags uint32, context *fuse.Context) (nodefs.File, fuse.Status) {
+	c.cacheLock.RLock()
+	if entry, ok := c.fileCache[name]; ok {
+		fh := NewFileHandle(entry)
+		c.cacheLock.RUnlock()
+		return fh, fuse.OK
+	}
+	c.cacheLock.RUnlock()
 	mdata, err := c.store.GetFiledata(name)
 	if err != nil {
 		if err == gocql.ErrNotFound {
@@ -280,16 +282,24 @@ func (c *CassFs) Open(name string, flags uint32, context *fuse.Context) (nodefs.
 	if err != nil {
 		return nil, fuse.EIO
 	}
-	fd := NewFileData(name, mdata.Hash, data)
-	fd.Attr = mdata.Metadata.Attr
+	fd := NewFileData(name, c, mdata.Hash, data, mdata.Metadata.Attr)
+	c.cacheLock.Lock()
+	c.fileCache[name] = fd
+	c.cacheLock.Unlock()
 	fh := NewFileHandle(fd)
-	fh.fileData.Fs = c
 	return fh, fuse.OK
+}
+
+func (c *CassFs) Release(name string) {
+	c.cacheLock.Lock()
+	defer c.cacheLock.Unlock()
+	if _, ok := c.fileCache[name]; ok {
+		delete(c.fileCache, name)
+	}
 }
 
 //This needs to be fixed
 func (c *CassFs) Create(name string, flags uint32, mode uint32, context *fuse.Context) (nodefs.File, fuse.Status) {
-	log.Printf("Should be creating file (%s)\n", name)
 	_, err := c.store.GetFiledata(name)
 	if err != nil {
 		if err == gocql.ErrNotFound {
@@ -301,17 +311,17 @@ func (c *CassFs) Create(name string, flags uint32, mode uint32, context *fuse.Co
 				log.Printf("Error creating file: %s\n", err)
 				return nil, fuse.EIO
 			}
-			fd := NewFileData(name, []byte{}, []byte{})
-			fd.Attr = &attr
+			fd := NewFileData(name, c, []byte{}, []byte{}, &attr)
+			c.cacheLock.Lock()
+			c.fileCache[name] = fd
+			c.cacheLock.Unlock()
 			fh := NewFileHandle(fd)
-			fh.fileData.Fs = c
 			return fh, fuse.OK
 		} else {
 			log.Printf("could not get file information for: %s\n", name)
 			return nil, fuse.EIO
 		}
 	}
-	log.Printf("The file exists\n")
 	return nil, fuse.Status(syscall.EEXIST)
 }
 

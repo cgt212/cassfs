@@ -24,11 +24,15 @@ package cass
 import (
 	"crypto/sha512"
 	"encoding/json"
+	"fmt"
 	"log"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/hanwen/go-fuse/fuse"
 	"github.com/gocql/gocql"
+	"github.com/golang/groupcache"
 )
 
 
@@ -41,29 +45,37 @@ type CassMetadata struct {
 }
 
 type CassFsMetadata struct {
-	Metadata CassMetadata
-	Hash     []byte
+	Metadata  CassMetadata
+	Timestamp int64
+	Hash      []byte
 }
 
 type Cass struct {
-	Host         string
-	Port         int
-	ProtoVersion int
-	Keyspace     string
-	OwnerId      int64
-	Environment  string
-	cluster      *gocql.ClusterConfig
-	session      *gocql.Session
+	Host           string
+	Port           int
+	ProtoVersion   int
+	Keyspace       string
+	OwnerId        int64
+	Environment    string
+	CacheEnabled   bool
+	CacheSize      int64
+	FcacheDuration int64
+	cache          *groupcache.Group
+	cluster        *gocql.ClusterConfig
+	cacheLock      sync.RWMutex
+	fileCache      map[string]*CassFsMetadata
+	session        *gocql.Session
 }
 
 func NewDefaultCass() *Cass {
 	return &Cass{
-		Host:         "localhost",
-		Port:         1234,
-		ProtoVersion: 4,
-		Keyspace:     "cstore",
-		OwnerId:      1,
-		Environment:  "prod",
+		Host:           "localhost",
+		Port:           1234,
+		ProtoVersion:   4,
+		Keyspace:       "cstore",
+		OwnerId:        1,
+		Environment:    "prod",
+		FcacheDuration: 60,
 	}
 }
 
@@ -109,6 +121,20 @@ func (c *Cass) Init() error {
 	session, err := c.cluster.CreateSession()
 	if err != nil {
 		return err
+	}
+	c.fileCache = make(map[string]*CassFsMetadata)
+	if c.CacheEnabled {
+		var getterFunc = func(ctx groupcache.Context, key string, dest groupcache.Sink) error {
+			cass := ctx.(*Cass)
+			data, err := cass.ReadData([]byte(key))
+			if err != nil {
+				return err
+			}
+			dest.SetBytes(data)
+			return nil
+		}
+		groupName := fmt.Sprintf("%d:%s", c.OwnerId, c.Environment)
+		c.cache = groupcache.NewGroup(groupName, c.CacheSize, groupcache.GetterFunc(getterFunc))
 	}
 	c.session = session
 	return nil
@@ -161,7 +187,15 @@ func (c *Cass) GetFiledata(name string) (*CassFsMetadata, error) {
 	var meta CassMetadata
 	var metajson, hash []byte
 	parent, file := c.splitPath(name)
-	log.Printf("Trying to find %s:%s\n", parent, file)
+	c.cacheLock.RLock()
+	if entry, ok := c.fileCache[name]; ok {
+		c.cacheLock.RUnlock()
+		now := time.Now()
+		if now.Unix() - entry.Timestamp < c.FcacheDuration {
+			return entry, nil
+		}
+	}
+	c.cacheLock.RUnlock()
 	err := c.session.Query("SELECT hash, metadata FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", c.OwnerId, c.Environment, parent, file).Consistency(gocql.One).Scan(&hash, &metajson)
 	if err != nil {
 		return nil, err
@@ -170,7 +204,11 @@ func (c *Cass) GetFiledata(name string) (*CassFsMetadata, error) {
 	ret := &CassFsMetadata{
 		Metadata: meta,
 		Hash: hash,
+		Timestamp: time.Now().Unix(),
 	}
+	c.cacheLock.Lock()
+	c.fileCache[name] = ret
+	c.cacheLock.Unlock()
 	return ret, nil
 }
 
@@ -255,6 +293,15 @@ func (c *Cass) WriteMetadata(path string, meta CassMetadata) error {
 		return err
 	}
 
+	c.cacheLock.RLock()
+	_, ok := c.fileCache[path]
+	c.cacheLock.RUnlock()
+	if ok {
+		c.cacheLock.Lock()
+		delete(c.fileCache, path)
+		c.cacheLock.Unlock()
+	}
+
 	err = c.session.Query("UPDATE filesystem SET metadata = ? WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", metab, c.OwnerId, c.Environment, dir, file).Consistency(gocql.One).Exec()
 	return err
 }
@@ -287,11 +334,19 @@ func (c *Cass) UpdateFile(f *CassFileData) error {
 	if err != nil {
 		return err
 	}
+	c.cacheLock.RLock()
+	_, ok := c.fileCache[f.Name]
+	c.cacheLock.RUnlock()
+	if ok {
+		c.cacheLock.Lock()
+		delete(c.fileCache, f.Name)
+		c.cacheLock.Unlock()
+	}
 	return nil
 }
 
-//Read reads in the data for the hash blob and returns it as a byte array
-func (c *Cass) Read(hash []byte) ([]byte, error) {
+//read reads in the data for the hash blob and returns it as a byte array
+func (c *Cass) ReadData(hash []byte) ([]byte, error) {
 	var buffer, data []byte
 	var loc int
 	iter := c.session.Query("SELECT location, data FROM filedata WHERE hash = ?", hash).Iter()
@@ -299,6 +354,22 @@ func (c *Cass) Read(hash []byte) ([]byte, error) {
 		buffer = append(buffer, data...)
 	}
 	return buffer, nil
+}
+
+//Read is the wrapper for read that will check the cache before reading from cassandra
+func (c *Cass) Read(hash []byte) ([]byte, error) {
+	var data []byte
+	var err error
+	if c.CacheEnabled {
+		err = c.cache.Get(c, string(hash), groupcache.AllocatingByteSliceSink(&data))
+	} else {
+		data, err = c.ReadData(hash)
+	}
+	if err != nil {
+		log.Printf("%s\n", err)
+		return nil, err
+	}
+	return data, err
 }
 
 //DeleteFile removes a file from the filesystem and updates the reference count
@@ -316,29 +387,41 @@ func (c *Cass) DeleteFile(name string) error {
 	if len(hash) > 0 {
 		err = c.decrementDataRef(hash)
 	}
+	//Check if there is an entry in the cache
+	if _, ok := c.fileCache[name]; ok {
+		delete(c.fileCache, name)
+	}
 	return err
 }
 
 //OpenDir returns the files stored in dir
 func (c *Cass) OpenDir(dir string) ([]fuse.DirEntry, error) {
 	var file_list []fuse.DirEntry
-	var meta []byte
+	var meta, hash []byte
 	var file string
 
-	log.Printf("STORE: Opening Dir (%s)\n", dir)
+	now := time.Now()
+
 	dirId, err := c.FindDir(dir)
 	if err != nil {
 		log.Printf("Something bad happened about the lookup: %s\n", err)
 	}
-	iter := c.session.Query("SELECT name, metadata FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ?", c.OwnerId, c.Environment, dirId).Iter()
-	for iter.Scan(&file, &meta) {
+	iter := c.session.Query("SELECT name, metadata, hash FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ?", c.OwnerId, c.Environment, dirId).Iter()
+	for iter.Scan(&file, &meta, &hash) {
 		finfo := &CassMetadata{}
 		err := json.Unmarshal(meta, finfo)
 		if err != nil {
 			log.Printf("Error decoding metadata for (%s): %s\n", file, err)
 			continue
 		}
-		log.Printf("Appending %s to the directory list\n", file)
+		key := fmt.Sprintf("%s/%s", dir, file)
+		c.cacheLock.Lock()
+		c.fileCache[key] = &CassFsMetadata{
+			Metadata: *finfo,
+			Timestamp: now.Unix(),
+			Hash: hash,
+		}
+		c.cacheLock.Unlock()
 		file_list = append(file_list, fuse.DirEntry{Mode: finfo.Attr.Mode, Name: file})
 	}
 	err = iter.Close();
@@ -379,7 +462,6 @@ func (c *Cass) WriteFileData(data []byte) ([]byte, error) {
 		end = len(data)
 	}
 	hash := ShaSum(data)
-	log.Printf("Writing %d bytes for file\n", len(data))
 	err := c.session.Query("SELECT hash FROM filedata WHERE hash = ?", hash).Consistency(gocql.One).Scan(&h)
 	if err == nil {
 		//The data is already in the DB
@@ -390,7 +472,6 @@ func (c *Cass) WriteFileData(data []byte) ([]byte, error) {
 		return nil, err
 	}
 	for {
-		log.Printf("Writing blocks from: %d to %d\n", start, end)
 		err := c.session.Query("INSERT INTO filedata (hash, location, data) VALUES(?, ?, ?)", hash, start, data[start:end]).Exec()
 		if err != nil {
 			log.Printf("Error writing data: %s\n", err)
