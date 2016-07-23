@@ -114,6 +114,7 @@ func main() {
 	}
 
 	fs := cass.NewCassFs(c, opts)
+	fs.Mount = *mount
 	//This section is taken directly from the examples - not fully understood
 	nodeFs := pathfs.NewPathNodeFs(fs, &pathfs.PathNodeFsOptions{ClientInodes: true})
 	mOpts := nodefs.Options{

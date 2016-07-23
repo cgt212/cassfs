@@ -41,10 +41,11 @@ type CassFsOptions struct {
 
 type CassFs struct {
 	pathfs.FileSystem
+	Mount     string
 	cacheLock sync.RWMutex
 	fileCache map[string]*CassFileData
-	store *Cass
-	options *CassFsOptions
+	store     *Cass
+	options   *CassFsOptions
 }
 
 func NewCassFs(s *Cass, opts *CassFsOptions) *CassFs {

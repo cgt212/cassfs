@@ -64,6 +64,8 @@ type Cass struct {
 	cluster        *gocql.ClusterConfig
 	cacheLock      sync.RWMutex
 	fileCache      map[string]*CassFsMetadata
+	uuidLock       sync.RWMutex
+	uuidCache      map[string]string
 	session        *gocql.Session
 }
 
@@ -123,6 +125,7 @@ func (c *Cass) Init() error {
 		return err
 	}
 	c.fileCache = make(map[string]*CassFsMetadata)
+	c.uuidCache = make(map[string]string)
 	if c.CacheEnabled {
 		var getterFunc = func(ctx groupcache.Context, key string, dest groupcache.Sink) error {
 			cass := ctx.(*Cass)
@@ -143,7 +146,15 @@ func (c *Cass) Init() error {
 //FindDir will find the UUID of the directory
 func (c *Cass) FindDir(dir string) (string, error) {
 	var parentBytes []byte
+	log.Printf("Finding %s ...\n", dir)
+	c.uuidLock.RLock()
+	entry, ok := c.uuidCache[dir]
+	c.uuidLock.RUnlock()
+	if ok {
+		return entry, nil
+	}
 	paths := strings.Split(dir, "/")
+	log.Printf("Searching for %s:%s", "", paths[0])
 	//We have to bootstrap the lookup process by finding the first-level directory
 	err := c.session.Query("SELECT hash FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", c.OwnerId, c.Environment, "", paths[0]).Consistency(gocql.One).Scan(&parentBytes)
 	if err != nil {
@@ -156,6 +167,7 @@ func (c *Cass) FindDir(dir string) (string, error) {
 		return "", err
 	}
 	for _, d := range paths[1:] {
+		log.Printf("Searching for %s:%s", parent.String(), d)
 		err = c.session.Query("SELECT hash FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", c.OwnerId, c.Environment, parent.String(), d).Consistency(gocql.One).Scan(&parentBytes)
 		if err != nil {
 			log.Printf("There was an error finding the root dir:%s\n", err)
@@ -167,6 +179,9 @@ func (c *Cass) FindDir(dir string) (string, error) {
 			return "", err
 		}
 	}
+	c.uuidLock.Lock()
+	c.uuidCache[dir] = parent.String()
+	c.uuidLock.Unlock()
 	return parent.String(), nil
 }
 
@@ -188,14 +203,18 @@ func (c *Cass) GetFiledata(name string) (*CassFsMetadata, error) {
 	var metajson, hash []byte
 	parent, file := c.splitPath(name)
 	c.cacheLock.RLock()
-	if entry, ok := c.fileCache[name]; ok {
-		c.cacheLock.RUnlock()
+	entry, ok := c.fileCache[name]
+	c.cacheLock.RUnlock()
+	if ok {
 		now := time.Now()
 		if now.Unix() - entry.Timestamp < c.FcacheDuration {
 			return entry, nil
+		} else {
+			c.cacheLock.Lock()
+			delete(c.fileCache, name)
+			c.cacheLock.Unlock()
 		}
 	}
-	c.cacheLock.RUnlock()
 	err := c.session.Query("SELECT hash, metadata FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", c.OwnerId, c.Environment, parent, file).Consistency(gocql.One).Scan(&hash, &metajson)
 	if err != nil {
 		return nil, err
@@ -404,6 +423,7 @@ func (c *Cass) OpenDir(dir string) ([]fuse.DirEntry, error) {
 
 	dirId, err := c.FindDir(dir)
 	if err != nil {
+		log.Printf("When looking up %s\n", dir)
 		log.Printf("Something bad happened about the lookup: %s\n", err)
 	}
 	iter := c.session.Query("SELECT name, metadata, hash FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ?", c.OwnerId, c.Environment, dirId).Iter()
