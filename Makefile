@@ -13,11 +13,11 @@ test:
 
 osx:
 	go generate ./...
-	$(GO_OSX) go build -o cassfs
+	$(GO_OSX) go build -o cassfs -ldflags $(LDFLAGS) .
 
 linux:
 	go generate ./...
-	$(GO_LINUX) go build -o cassfs
+	$(GO_LINUX) go build -o cassfs -ldflags $(LDFLAGS) .
 
 clean:
 	find . -name *_gen.go -type f -exec rm {} \;
@@ -25,7 +25,7 @@ clean:
 
 run:
 	go generate ./...
-	go run main.go
+	go run -ldflags $(LDFLAGS) main.go
 
 fmt:
 	go fmt ./...
