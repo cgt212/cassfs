@@ -11,7 +11,7 @@
  *
  *This program is distributed in the hope that it will be useful,
  *but WITHOUT ANY WARRANTY; without even the implied warranty of
- *MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the 
+ *MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *GNU General Public License for more details.
  *
  *You should have received a copy of the GNU General Public License
@@ -22,7 +22,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"log"
 	"os"
 	"runtime/pprof"
@@ -46,15 +45,13 @@ var bytePrefix = map[string]int{
 func parseCacheSize(size string) int64 {
 	exp, ok := bytePrefix[string(size[len(size)-1])]
 	if !ok {
-		str := fmt.Sprintf("Invalid Cache size %s", string(size[len(size)-1]))
-		panic(str)
+		log.Fatalln("Invalid Cache size", string(size[len(size)-1]))
 	}
 	count := string(size[:len(size)-1])
 	factor, err := strconv.Atoi(count)
 
 	if err != nil {
-		str := fmt.Sprintf("Error converting cache size to number: %s\n", err)
-		panic(str)
+		log.Println("Error converting cache size to number:", err)
 	}
 
 	return int64(exp * factor)
@@ -92,19 +89,17 @@ func main() {
 	}
 	err := c.Init()
 	if err != nil {
-		log.Println("Could not initialize cluster connection:", err)
-		os.Exit(1)
+		log.Fatalln("Could not initialize cluster connection:", err)
 	}
 
-        //The stat of the directory on the file system is being used to create the Owner and Permissions of the directory
-        dinfo, err := os.Stat(*mount)
-        if err != nil {
-                log.Println("Error opening:", err)
-                os.Exit(1)
-        }
+	//The stat of the directory on the file system is being used to create the Owner and Permissions of the directory
+	dinfo, err := os.Stat(*mount)
+	if err != nil {
+		log.Fatalln("Error opening:", err)
+	}
 	owner := fuse.Owner{
-		Uid:      dinfo.Sys().(*syscall.Stat_t).Uid,
-		Gid:      dinfo.Sys().(*syscall.Stat_t).Gid,
+		Uid: dinfo.Sys().(*syscall.Stat_t).Uid,
+		Gid: dinfo.Sys().(*syscall.Stat_t).Gid,
 	}
 	mode := uint32(dinfo.Mode())
 
@@ -125,13 +120,13 @@ func main() {
 	}
 	mountState, _, err := nodefs.MountRoot(*mount, nodeFs.Root(), &mOpts)
 	if err != nil {
-		log.Fatal("Mount fail:", err)
+		log.Fatalln("Mount fail:", err)
 	}
 
 	if *profile != "" {
 		f, err := os.Create(*profile)
 		if err != nil {
-			log.Fatal(err)
+			log.Fatalln(err)
 		}
 		pprof.StartCPUProfile(f)
 		defer pprof.StopCPUProfile()

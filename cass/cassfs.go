@@ -11,7 +11,7 @@
  *
  *This program is distributed in the hope that it will be useful,
  *but WITHOUT ANY WARRANTY; without even the implied warranty of
- *MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the 
+ *MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *GNU General Public License for more details.
  *
  *You should have received a copy of the GNU General Public License
@@ -50,8 +50,8 @@ type CassFs struct {
 
 func NewCassFs(s *Cass, opts *CassFsOptions) *CassFs {
 	return &CassFs{
-		store:   s,
-		options: opts,
+		store:     s,
+		options:   opts,
 		fileCache: make(map[string]*CassFileData),
 	}
 }
@@ -96,7 +96,7 @@ func (c *CassFs) OpenDir(name string, context *fuse.Context) ([]fuse.DirEntry, f
 		if err == gocql.ErrNotFound {
 			return nil, fuse.ENOENT
 		}
-		log.Printf("There was some kind of other error")
+		log.Println("There was some kind of other error")
 		return nil, fuse.EIO
 	}
 	return res, fuse.OK
@@ -117,7 +117,7 @@ func (c *CassFs) GetAttr(name string, context *fuse.Context) (*fuse.Attr, fuse.S
 		if err == gocql.ErrNotFound {
 			return nil, fuse.ENOENT
 		}
-		log.Printf("I/O Error: %s\n", err)
+		log.Println("I/O Error:", err)
 		return nil, fuse.EIO
 	}
 	return meta.Metadata.Attr, fuse.OK
@@ -135,7 +135,7 @@ func (c *CassFs) Link(orig string, newName string, context *fuse.Context) fuse.S
 func (c *CassFs) Rmdir(path string, context *fuse.Context) fuse.Status {
 	data, err := c.store.GetFiledata(path)
 	if err != nil {
-		log.Printf("Unable to get information for %s: %s\n", path, err)
+		log.Println("Unable to get information for %s: %s", path, err)
 		return fuse.EIO
 	}
 	if !data.Metadata.Attr.IsDir() {
@@ -163,7 +163,7 @@ func (c *CassFs) Mkdir(path string, mode uint32, context *fuse.Context) fuse.Sta
 	}
 	err = c.store.MakeDirectory(path, &fuse.Attr{Mode: fuse.S_IFDIR | mode})
 	if err != nil {
-		log.Printf("There was an error making directory (%s): %s\n", path, err)
+		log.Println("There was an error making directory (%s): %s", path, err)
 		return fuse.EIO
 	}
 	return fuse.OK
@@ -172,13 +172,13 @@ func (c *CassFs) Mkdir(path string, mode uint32, context *fuse.Context) fuse.Sta
 func (c *CassFs) Symlink(pointedTo string, linkName string, context *fuse.Context) fuse.Status {
 	ctime := time.Now()
 	attr := fuse.Attr{
-		Mode: fuse.S_IFLNK | 0777,
-		Ctime: uint64(ctime.Unix()),
+		Mode:      fuse.S_IFLNK | 0777,
+		Ctime:     uint64(ctime.Unix()),
 		Ctimensec: uint32(ctime.Nanosecond()),
 	}
 	err := c.store.CreateFile(linkName, &attr, []byte(pointedTo))
 	if err != nil {
-		log.Printf("Error creating symlink (%s): %s\n", linkName, err)
+		log.Println("Error creating symlink (%s): %s", linkName, err)
 		return fuse.EIO
 	}
 	return fuse.OK
@@ -191,25 +191,25 @@ func (c *CassFs) Truncate(path string, size uint64, context *fuse.Context) fuse.
 func (c *CassFs) Utimens(name string, atime *time.Time, mtime *time.Time, context *fuse.Context) fuse.Status {
 	meta, err := c.store.GetFiledata(name)
 	if err != nil {
-		log.Printf("Error getting (%s) metadata: %s\n", name, err)
+		log.Println("Error getting (%s) metadata: %s", name, err)
 		return fuse.EIO
 	}
 	meta.Metadata.Attr.Atime = uint64(atime.Unix())
-        meta.Metadata.Attr.Atimensec = uint32(atime.Nanosecond())
-        meta.Metadata.Attr.Mtime = uint64(mtime.Unix())
-        meta.Metadata.Attr.Mtimensec = uint32(mtime.Nanosecond())
-        err = c.store.WriteMetadata(name, meta.Metadata)
-        if err != nil {
-                log.Printf("Error updating file: %s\n", err)
-                return fuse.EIO
-        }
+	meta.Metadata.Attr.Atimensec = uint32(atime.Nanosecond())
+	meta.Metadata.Attr.Mtime = uint64(mtime.Unix())
+	meta.Metadata.Attr.Mtimensec = uint32(mtime.Nanosecond())
+	err = c.store.WriteMetadata(name, meta.Metadata)
+	if err != nil {
+		log.Println("Error updating file:", err)
+		return fuse.EIO
+	}
 	return fuse.OK
 }
 
 func (c *CassFs) Chown(name string, uid uint32, gid uint32, context *fuse.Context) fuse.Status {
 	meta, err := c.store.GetFiledata(name)
 	if err != nil {
-		log.Printf("Error getting (%s) metadata: %s\n", name, err)
+		log.Println("Error getting (%s) metadata: %s", name, err)
 		return fuse.EIO
 	}
 	if int32(uid) > 0 {
@@ -220,7 +220,7 @@ func (c *CassFs) Chown(name string, uid uint32, gid uint32, context *fuse.Contex
 	}
 	err = c.store.WriteMetadata(name, meta.Metadata)
 	if err != nil {
-		log.Printf("Error writing (%s) metadata: %s\n", name, err)
+		log.Println("Error writing (%s) metadata: %s", name, err)
 		return fuse.EIO
 	}
 	return fuse.OK
@@ -230,14 +230,14 @@ func (c *CassFs) Chmod(name string, mode uint32, context *fuse.Context) fuse.Sta
 	permMask := uint32(07777)
 	meta, err := c.store.GetFiledata(name)
 	if err != nil {
-		log.Printf("Could not get metadata for file: %s\n", name)
+		log.Println("Could not get metadata for file:", name)
 		return fuse.EIO
 	}
 	meta.Metadata.Attr.Mode = (meta.Metadata.Attr.Mode &^ permMask) | mode
 	//There needs to be a set filedata function in the store, which there is not
 	err = c.store.WriteMetadata(name, meta.Metadata)
 	if err != nil {
-		log.Printf("Error writing (%s) metadata: %s\n", name, err)
+		log.Println("Error writing (%s) metadata: %s", name, err)
 		return fuse.EIO
 	}
 	return fuse.OK
@@ -254,7 +254,7 @@ func (c *CassFs) Unlink(name string, context *fuse.Context) fuse.Status {
 func (c *CassFs) Readlink(name string, context *fuse.Context) (string, fuse.Status) {
 	meta, err := c.store.GetFiledata(name)
 	if err != nil {
-		log.Printf("could not get metadata for: %s\n", name)
+		log.Println("could not get metadata for:", name)
 		return "", fuse.EIO
 	}
 	return string(meta.Hash), fuse.OK
@@ -309,7 +309,7 @@ func (c *CassFs) Create(name string, flags uint32, mode uint32, context *fuse.Co
 			}
 			err = c.store.CreateFile(name, &attr, []byte{})
 			if err != nil {
-				log.Printf("Error creating file: %s\n", err)
+				log.Println("Error creating file:", err)
 				return nil, fuse.EIO
 			}
 			fd := NewFileData(name, c, []byte{}, []byte{}, &attr)
@@ -319,7 +319,7 @@ func (c *CassFs) Create(name string, flags uint32, mode uint32, context *fuse.Co
 			fh := NewFileHandle(fd)
 			return fh, fuse.OK
 		} else {
-			log.Printf("could not get file information for: %s\n", name)
+			log.Println("could not get file information for:", name)
 			return nil, fuse.EIO
 		}
 	}
