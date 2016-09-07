@@ -38,13 +38,14 @@ type CassFileHandle struct {
 
 type CassFileData struct {
 	sync.Mutex
-	Fs *CassFs
-	Refs int32
-	Name string
-	Data []byte
-	Hash []byte
+	Fs    *CassFs
+	Refs  int32
+	Name  *string
+	Data  []byte
+	Hash  []byte
 	Dirty bool
-	Attr *fuse.Attr
+	lign  bool
+	Attr  *fuse.Attr
 }
 
 func NewFileHandle(f *CassFileData) *CassFileHandle {
@@ -58,27 +59,27 @@ func NewFileHandle(f *CassFileData) *CassFileHandle {
 	}
 }
 
-func NewEmptyFileData(path string) *CassFileData {
+func NewEmptyFileData(path *string) *CassFileData {
 	return &CassFileData{
-		Refs: 0,
+		Refs:  0,
 		Dirty: true,
 	}
 }
 
-func NewFileData(path string, fs *CassFs, hash []byte, data []byte, attr *fuse.Attr) *CassFileData {
+func NewFileData(path *string, fs *CassFs, hash []byte, data []byte, attr *fuse.Attr) *CassFileData {
 	return &CassFileData{
-		Refs: 0,
-		Fs: fs,
-		Name: path,
-		Data: data,
-		Hash: hash,
+		Refs:  0,
+		Fs:    fs,
+		Name:  path,
+		Data:  data,
+		Hash:  hash,
 		Dirty: false,
-		Attr: attr,
+		Attr:  attr,
 	}
 }
 
 func (c *CassFileHandle) String() string {
-	return c.fileData.Name
+	return *c.fileData.Name
 }
 
 func (c *CassFileHandle) Chmod(mode uint32) fuse.Status {
@@ -86,7 +87,7 @@ func (c *CassFileHandle) Chmod(mode uint32) fuse.Status {
 	c.fileData.Attr.Mode = (c.fileData.Attr.Mode &^ permMask) | mode
 	err := c.fileData.Fs.FlushFile(c.fileData)
 	if err != nil {
-		log.Printf("Error flushing file to data store: %s\n", err)
+		log.Println("Error flushing file to data store:", err)
 		return fuse.EIO
 	}
 	return fuse.OK
@@ -118,7 +119,7 @@ func (c *CassFileHandle) Read(buf []byte, off int64) (fuse.ReadResult, fuse.Stat
 
 func (c *CassFileHandle) Write(data []byte, offset int64) (uint32, fuse.Status) {
 	if int(offset) > len(c.fileData.Data) {
-		c.fileData.Data = append(c.fileData.Data, bytes.Repeat([]byte{0}, int(offset) - len(c.fileData.Data))...)
+		c.fileData.Data = append(c.fileData.Data, bytes.Repeat([]byte{0}, int(offset)-len(c.fileData.Data))...)
 		c.fileData.Data = append(c.fileData.Data, data...)
 		return uint32(len(data)), fuse.OK
 	}
@@ -130,12 +131,12 @@ func (c *CassFileHandle) Write(data []byte, offset int64) (uint32, fuse.Status) 
 
 func (c *CassFileHandle) Flush() fuse.Status {
 	//This function should write everything back
-	if ! c.fileData.Dirty {
+	if !c.fileData.Dirty {
 		return fuse.OK
 	}
 	err := c.fileData.Fs.FlushFile(c.fileData)
 	if err != nil {
-		log.Printf("Error updating file: %s\n", err)
+		log.Println("Error updating file:", err)
 		return fuse.EIO
 	}
 	return fuse.OK
@@ -150,7 +151,7 @@ func (c *CassFileHandle) Release() {
 	c.fileData.Refs--
 	c.fileData.Unlock()
 	if c.fileData.Refs == 0 {
-		c.fileData.Fs.Release(c.fileData.Name)
+		c.fileData.Fs.Release(*c.fileData.Name)
 	}
 	c.closed = true
 	return
@@ -200,7 +201,7 @@ func (c *CassFileHandle) Utimens(atime *time.Time, mtime *time.Time) fuse.Status
 	c.fileData.Attr.Mtimensec = uint32(mtime.Nanosecond())
 	err := c.fileData.Fs.FlushFile(c.fileData)
 	if err != nil {
-		log.Printf("Error updating file: %s\n", err)
+		log.Println("Error updating file:", err)
 		return fuse.EIO
 	}
 	return fuse.OK

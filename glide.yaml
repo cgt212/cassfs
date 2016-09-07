@@ -1,4 +1,9 @@
 package: github.com/cgt212/cassfs
+ignore:
+- github.com/cgt212/cassfs
+- github.com/cgt212/cassfs/cass
+- github.com/cgt212/cassfs/cmd
+- github.com/cgt212/cassfs/driver
 import:
 - package: github.com/gocql/gocql
 - package: github.com/golang/groupcache
@@ -7,3 +12,5 @@ import:
   - fuse
   - fuse/nodefs
   - fuse/pathfs
+- package: github.com/spf13/cobra
+- package: github.com/spf13/viper

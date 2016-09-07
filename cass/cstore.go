@@ -11,7 +11,7 @@
  *
  *This program is distributed in the hope that it will be useful,
  *but WITHOUT ANY WARRANTY; without even the implied warranty of
- *MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the 
+ *MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *GNU General Public License for more details.
  *
  *You should have received a copy of the GNU General Public License
@@ -20,21 +20,20 @@
 
 package cass
 
-
 import (
+	"bytes"
 	"crypto/sha512"
 	"encoding/json"
-	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/hanwen/go-fuse/fuse"
 	"github.com/gocql/gocql"
 	"github.com/golang/groupcache"
+	"github.com/hanwen/go-fuse/fuse"
 )
-
 
 //Setting the blocksize to 1M for now
 const BLOBSIZE = 1024 * 1024
@@ -51,15 +50,17 @@ type CassFsMetadata struct {
 }
 
 type Cass struct {
-	Host           string
+	Host           []string
 	Port           int
 	ProtoVersion   int
 	Keyspace       string
 	OwnerId        int64
 	Environment    string
+	Consistency    gocql.Consistency
 	CacheEnabled   bool
 	CacheSize      int64
 	FcacheDuration int64
+	Root           *fuse.Attr
 	cache          *groupcache.Group
 	cluster        *gocql.ClusterConfig
 	cacheLock      sync.RWMutex
@@ -71,7 +72,7 @@ type Cass struct {
 
 func NewDefaultCass() *Cass {
 	return &Cass{
-		Host:           "localhost",
+		Host:           []string{"localhost"},
 		Port:           1234,
 		ProtoVersion:   4,
 		Keyspace:       "cstore",
@@ -99,9 +100,9 @@ func (c *Cass) splitPath(path string) (string, string) {
 		parentDir := _path[:idx]
 		parent, err := c.FindDir(parentDir)
 		if err != nil {
-			log.Printf("Unable to split and find parent: %s\n", err)
+			log.Println("Unable to split and find parent: " + err.Error())
 		}
-		child := _path[idx+1:len(_path)]
+		child := _path[idx+1 : len(_path)]
 		return parent, child
 	}
 	if strings.HasPrefix(_path, "/") {
@@ -117,15 +118,15 @@ func (c *Cass) splitPath(path string) (string, string) {
 
 //Init initializes the connection to the Cassandra server
 func (c *Cass) Init() error {
-	c.cluster = gocql.NewCluster(c.Host)
+	c.cluster = gocql.NewCluster(c.Host...)
 	c.cluster.ProtoVersion = 4
 	c.cluster.Keyspace = c.Keyspace
 	session, err := c.cluster.CreateSession()
 	if err != nil {
 		return err
 	}
-	c.fileCache = make(map[string]*CassFsMetadata)
-	c.uuidCache = make(map[string]string)
+	c.fileCache = make(map[string]*CassFsMetadata, 1024)
+	c.uuidCache = make(map[string]string, 1024)
 	if c.CacheEnabled {
 		var getterFunc = func(ctx groupcache.Context, key string, dest groupcache.Sink) error {
 			cass := ctx.(*Cass)
@@ -136,8 +137,12 @@ func (c *Cass) Init() error {
 			dest.SetBytes(data)
 			return nil
 		}
-		groupName := fmt.Sprintf("%d:%s", c.OwnerId, c.Environment)
-		c.cache = groupcache.NewGroup(groupName, c.CacheSize, groupcache.GetterFunc(getterFunc))
+		var groupName bytes.Buffer
+		groupName.WriteString(strconv.FormatInt(c.OwnerId, 10))
+		groupName.WriteString(":")
+		groupName.WriteString(c.Environment)
+
+		c.cache = groupcache.NewGroup(groupName.String(), c.CacheSize, groupcache.GetterFunc(getterFunc))
 	}
 	c.session = session
 	return nil
@@ -146,7 +151,9 @@ func (c *Cass) Init() error {
 //FindDir will find the UUID of the directory
 func (c *Cass) FindDir(dir string) (string, error) {
 	var parentBytes []byte
-	log.Printf("Finding %s ...\n", dir)
+	if len(dir) == 0 {
+		return "", nil
+	}
 	c.uuidLock.RLock()
 	entry, ok := c.uuidCache[dir]
 	c.uuidLock.RUnlock()
@@ -154,28 +161,26 @@ func (c *Cass) FindDir(dir string) (string, error) {
 		return entry, nil
 	}
 	paths := strings.Split(dir, "/")
-	log.Printf("Searching for %s:%s", "", paths[0])
 	//We have to bootstrap the lookup process by finding the first-level directory
-	err := c.session.Query("SELECT hash FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", c.OwnerId, c.Environment, "", paths[0]).Consistency(gocql.One).Scan(&parentBytes)
+	err := c.session.Query("SELECT hash FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", c.OwnerId, c.Environment, "", paths[0]).Scan(&parentBytes)
 	if err != nil {
-		log.Printf("There was an error finding the root dir:%s\n", err)
+		log.Println("There was an error finding the root dir child (" + paths[0] + "): " + err.Error())
 		return "", err
 	}
 	parent, err := gocql.UUIDFromBytes(parentBytes)
 	if err != nil {
-		log.Printf("Unable to parse UUID from bytes: %s\n", err)
+		log.Println("Unable to parse UUID from bytes:" + err.Error())
 		return "", err
 	}
 	for _, d := range paths[1:] {
-		log.Printf("Searching for %s:%s", parent.String(), d)
-		err = c.session.Query("SELECT hash FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", c.OwnerId, c.Environment, parent.String(), d).Consistency(gocql.One).Scan(&parentBytes)
+		err = c.session.Query("SELECT hash FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", c.OwnerId, c.Environment, parent.String(), d).Scan(&parentBytes)
 		if err != nil {
-			log.Printf("There was an error finding the root dir:%s\n", err)
+			log.Println("There was an error finding the dir (" + d + "): ", err.Error())
 			return "", err
 		}
 		parent, err = gocql.UUIDFromBytes(parentBytes)
 		if err != nil {
-			log.Printf("Unable to parse UUID from bytes: %s\n", err)
+			log.Println("Unable to parse UUID from bytes: " + err.Error())
 			return "", err
 		}
 	}
@@ -207,7 +212,7 @@ func (c *Cass) GetFiledata(name string) (*CassFsMetadata, error) {
 	c.cacheLock.RUnlock()
 	if ok {
 		now := time.Now()
-		if now.Unix() - entry.Timestamp < c.FcacheDuration {
+		if now.Unix()-entry.Timestamp < c.FcacheDuration {
 			return entry, nil
 		} else {
 			c.cacheLock.Lock()
@@ -215,14 +220,14 @@ func (c *Cass) GetFiledata(name string) (*CassFsMetadata, error) {
 			c.cacheLock.Unlock()
 		}
 	}
-	err := c.session.Query("SELECT hash, metadata FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", c.OwnerId, c.Environment, parent, file).Consistency(gocql.One).Scan(&hash, &metajson)
+	err := c.session.Query("SELECT hash, metadata FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", c.OwnerId, c.Environment, parent, file).Scan(&hash, &metajson)
 	if err != nil {
 		return nil, err
 	}
 	err = json.Unmarshal(metajson, &meta)
 	ret := &CassFsMetadata{
-		Metadata: meta,
-		Hash: hash,
+		Metadata:  meta,
+		Hash:      hash,
 		Timestamp: time.Now().Unix(),
 	}
 	c.cacheLock.Lock()
@@ -238,11 +243,11 @@ func (c *Cass) CreateFile(name string, attr *fuse.Attr, hash []byte) error {
 		XAttr: nil,
 	})
 	if err != nil {
-		log.Printf("Encoding error on metadata: %s\n", err)
+		log.Println("Encoding error on metadata:", err)
 		return err
 	}
 	dir, file := c.splitPath(name)
-	err = c.session.Query("INSERT INTO filesystem (cust_id, environment, directory, name, hash, metadata) VALUES(?, ?, ?, ?, ?, ?)", c.OwnerId, c.Environment, dir, file, hash, meta).Consistency(gocql.One).Exec()
+	err = c.session.Query("INSERT INTO filesystem (cust_id, environment, directory, name, hash, metadata) VALUES(?, ?, ?, ?, ?, ?)", c.OwnerId, c.Environment, dir, file, hash, meta).Consistency(c.Consistency).Exec()
 	if err != nil {
 		return err
 	}
@@ -259,17 +264,17 @@ func (c *Cass) Rename(oldName string, newName string) error {
 	oldDir, oldFile := c.splitPath(oldName)
 	newDir, newFile := c.splitPath(newName)
 
-	err := c.session.Query("SELECT hash, metadata FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", c.OwnerId, c.Environment, oldDir, oldFile).Consistency(gocql.One).Scan(&hash, &meta)
+	err := c.session.Query("SELECT hash, metadata FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", c.OwnerId, c.Environment, oldDir, oldFile).Scan(&hash, &meta)
 	if err != nil {
-		log.Printf("Error finding file to move from: %s\n", err)
+		log.Println("Error finding file to move from:", err)
 		return err
 	}
-	err = c.session.Query("INSERT INTO filesystem (cust_id, environment, directory, name, hash, metadata) VALUES(?, ?, ?, ?, ?, ?)", c.OwnerId, c.Environment, newDir, newFile, hash, meta).Consistency(gocql.One).Exec()
+	err = c.session.Query("INSERT INTO filesystem (cust_id, environment, directory, name, hash, metadata) VALUES(?, ?, ?, ?, ?, ?)", c.OwnerId, c.Environment, newDir, newFile, hash, meta).Consistency(c.Consistency).Exec()
 	if err != nil {
-		log.Printf("Error inserting new file: %s\n", err)
+		log.Println("Error inserting new file:", err)
 		return err
 	}
-	err = c.session.Query("DELETE FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", c.OwnerId, c.Environment, oldDir, oldFile).Consistency(gocql.One).Exec()
+	err = c.session.Query("DELETE FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", c.OwnerId, c.Environment, oldDir, oldFile).Consistency(c.Consistency).Exec()
 	//Skipping an error, because at this point the rename was completed.
 
 	return nil
@@ -308,7 +313,7 @@ func (c *Cass) WriteMetadata(path string, meta CassMetadata) error {
 
 	metab, err := json.Marshal(meta)
 	if err != nil {
-		log.Printf("Error encoding metadata: %s\n", err)
+		log.Println("Error encoding metadata:", err)
 		return err
 	}
 
@@ -321,16 +326,16 @@ func (c *Cass) WriteMetadata(path string, meta CassMetadata) error {
 		c.cacheLock.Unlock()
 	}
 
-	err = c.session.Query("UPDATE filesystem SET metadata = ? WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", metab, c.OwnerId, c.Environment, dir, file).Consistency(gocql.One).Exec()
+	err = c.session.Query("UPDATE filesystem SET metadata = ? WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", metab, c.OwnerId, c.Environment, dir, file).Consistency(c.Consistency).Exec()
 	return err
 }
 
 //UpdateFile Updates the attributes and data hash when a file changes
 func (c *Cass) UpdateFile(f *CassFileData) error {
-	parent, file := c.splitPath(f.Name)
+	parent, file := c.splitPath(*f.Name)
 	hash, err := c.WriteFileData(f.Data)
 	if err != nil {
-		log.Printf("Error writing Data: %s\n", err)
+		log.Println("Error writing Data:", err)
 		return err
 	}
 	old_hash := f.Hash
@@ -339,10 +344,10 @@ func (c *Cass) UpdateFile(f *CassFileData) error {
 		Attr: f.Attr,
 	})
 	if err != nil {
-		log.Printf("Encoding error: %s\n", err)
+		log.Println("Encoding error:", err)
 		return err
 	}
-	err = c.session.Query("UPDATE filesystem SET hash=?, metadata=? WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", f.Hash, meta, c.OwnerId, c.Environment, parent, file).Consistency(gocql.One).Exec()
+	err = c.session.Query("UPDATE filesystem SET hash=?, metadata=? WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", f.Hash, meta, c.OwnerId, c.Environment, parent, file).Consistency(c.Consistency).Exec()
 	if err != nil {
 		return err
 	}
@@ -354,11 +359,11 @@ func (c *Cass) UpdateFile(f *CassFileData) error {
 		return err
 	}
 	c.cacheLock.RLock()
-	_, ok := c.fileCache[f.Name]
+	_, ok := c.fileCache[*f.Name]
 	c.cacheLock.RUnlock()
 	if ok {
 		c.cacheLock.Lock()
-		delete(c.fileCache, f.Name)
+		delete(c.fileCache, *f.Name)
 		c.cacheLock.Unlock()
 	}
 	return nil
@@ -385,7 +390,7 @@ func (c *Cass) Read(hash []byte) ([]byte, error) {
 		data, err = c.ReadData(hash)
 	}
 	if err != nil {
-		log.Printf("%s\n", err)
+		log.Println(err)
 		return nil, err
 	}
 	return data, err
@@ -423,28 +428,36 @@ func (c *Cass) OpenDir(dir string) ([]fuse.DirEntry, error) {
 
 	dirId, err := c.FindDir(dir)
 	if err != nil {
-		log.Printf("When looking up %s\n", dir)
-		log.Printf("Something bad happened about the lookup: %s\n", err)
+		if err == gocql.ErrNotFound {
+			dirId = ""
+		} else {
+			log.Println("When looking up", dir)
+			log.Println("Something bad happened about the lookup:", err)
+		}
 	}
 	iter := c.session.Query("SELECT name, metadata, hash FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ?", c.OwnerId, c.Environment, dirId).Iter()
 	for iter.Scan(&file, &meta, &hash) {
 		finfo := &CassMetadata{}
 		err := json.Unmarshal(meta, finfo)
 		if err != nil {
-			log.Printf("Error decoding metadata for (%s): %s\n", file, err)
+			log.Println("Error decoding metadata for (%s): %s", file, err)
 			continue
 		}
-		key := fmt.Sprintf("%s/%s", dir, file)
+		var key bytes.Buffer
+		key.WriteString(dir)
+		key.WriteString("/")
+		key.WriteString(file)
+
 		c.cacheLock.Lock()
-		c.fileCache[key] = &CassFsMetadata{
-			Metadata: *finfo,
+		c.fileCache[key.String()] = &CassFsMetadata{
+			Metadata:  *finfo,
 			Timestamp: now.Unix(),
-			Hash: hash,
+			Hash:      hash,
 		}
 		c.cacheLock.Unlock()
 		file_list = append(file_list, fuse.DirEntry{Mode: finfo.Attr.Mode, Name: file})
 	}
-	err = iter.Close();
+	err = iter.Close()
 	if err != nil {
 		return nil, err
 	}
@@ -456,18 +469,18 @@ func (c *Cass) CopyFile(orig string, newFile string) error {
 	var hash, metadata []byte
 	dir, file := c.splitPath(orig)
 	newDir, newFile := c.splitPath(newFile)
-	err := c.session.Query("SELECT hash, metadata FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", c.OwnerId, c.Environment, dir, file).Consistency(gocql.One).Scan(&hash, &metadata)
+	err := c.session.Query("SELECT hash, metadata FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", c.OwnerId, c.Environment, dir, file).Scan(&hash, &metadata)
 	if err != nil {
 		return err
 	}
-	err = c.session.Query("INSERT INTO filesystem (cust_id, environment, directory, name, hash, metadata) VALUES(?, ?, ?, ?, ?, ?)", c.OwnerId, c.Environment, newDir, newFile, hash, metadata).Consistency(gocql.One).Exec()
+	err = c.session.Query("INSERT INTO filesystem (cust_id, environment, directory, name, hash, metadata) VALUES(?, ?, ?, ?, ?, ?)", c.OwnerId, c.Environment, newDir, newFile, hash, metadata).Consistency(c.Consistency).Exec()
 	if err != nil {
 		return err
 	}
 	err = c.incrementDataRef(hash)
 	if err != nil {
 		//We need to remove the new file entry to prevent an unallocated reference from being kept
-		c.session.Query("DELETE FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", c.OwnerId, c.Environment, newDir, newFile).Consistency(gocql.One).Exec()
+		c.session.Query("DELETE FROM filesystem WHERE cust_id = ? AND environment = ? AND directory = ? AND name = ?", c.OwnerId, c.Environment, newDir, newFile).Consistency(c.Consistency).Exec()
 		return err
 	}
 	return nil
@@ -482,7 +495,7 @@ func (c *Cass) WriteFileData(data []byte) ([]byte, error) {
 		end = len(data)
 	}
 	hash := ShaSum(data)
-	err := c.session.Query("SELECT hash FROM filedata WHERE hash = ?", hash).Consistency(gocql.One).Scan(&h)
+	err := c.session.Query("SELECT hash FROM filedata WHERE hash = ?", hash).Scan(&h)
 	if err == nil {
 		//The data is already in the DB
 		return hash, nil
@@ -494,7 +507,7 @@ func (c *Cass) WriteFileData(data []byte) ([]byte, error) {
 	for {
 		err := c.session.Query("INSERT INTO filedata (hash, location, data) VALUES(?, ?, ?)", hash, start, data[start:end]).Exec()
 		if err != nil {
-			log.Printf("Error writing data: %s\n", err)
+			log.Println("Error writing data:", err)
 			return nil, err
 		}
 		start += BLOBSIZE + 1
@@ -516,19 +529,19 @@ func (c *Cass) MakeDirectory(directory string, attr *fuse.Attr) error {
 
 	meta, err := json.Marshal(CassMetadata{Attr: attr})
 	if err != nil {
-		log.Printf("Encoding err: %s\n", err)
+		log.Println("Encoding err:", err)
 		return err
 	}
 
 	uuid := gocql.TimeUUID()
 
-	return c.session.Query("INSERT INTO filesystem (cust_id, environment, directory, name, hash, metadata) VALUES(?, ?, ?, ?, ?, ?)", c.OwnerId, c.Environment, parent, child, uuid.Bytes(), meta).Consistency(gocql.One).Exec()
+	return c.session.Query("INSERT INTO filesystem (cust_id, environment, directory, name, hash, metadata) VALUES(?, ?, ?, ?, ?, ?)", c.OwnerId, c.Environment, parent, child, uuid.Bytes(), meta).Consistency(c.Consistency).Exec()
 }
 
 //GetFileCount returns the number of files in the environment
 func (c *Cass) GetFileCount() (uint64, error) {
 	var fcount uint64
-	err := c.session.Query("SELECT count(1) FROM filesystem WHERE cust_id = ? AND environment = ?", c.OwnerId, c.Environment).Consistency(gocql.One).Scan(&fcount)
+	err := c.session.Query("SELECT count(1) FROM filesystem WHERE cust_id = ? AND environment = ?", c.OwnerId, c.Environment).Scan(&fcount)
 	if err != nil {
 		return 0, err
 	}
