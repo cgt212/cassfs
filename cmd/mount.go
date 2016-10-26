@@ -48,15 +48,18 @@ var MountCommand = &cobra.Command{
 var (
 	entry_ttl    float64
 	negative_ttl float64
+	fcache_ttl   int64
 	consistency  string
 )
 
 func init() {
 	MountCommand.Flags().Float64VarP(&entry_ttl, "entry_ttl", "t", 1.0, "fuse entry cache TTL.")
 	MountCommand.Flags().Float64VarP(&negative_ttl, "negative_ttl", "n", 1.0, "fuse negative cache TTL.")
+	MountCommand.Flags().Int64VarP(&fcache_ttl, "fcache_ttl", "f", 1, "File cache TTL.")
 	MountCommand.Flags().StringVarP(&consistency, "consistency", "c", "ONE", "Consistency level to use (ANY,ONE,TWO,THREE,QUORUM,ALL,...)")
 	viper.BindPFlag("entry_ttl", MountCommand.Flags().Lookup("entry_ttl"))
 	viper.BindPFlag("negative_ttl", MountCommand.Flags().Lookup("negative_ttl"))
+	viper.BindPFlag("fcache_ttl", MountCommand.Flags().Lookup("fcache_ttl"))
 	viper.BindPFlag("consistency", MountCommand.Flags().Lookup("consistency"))
 
 	RootCommand.AddCommand(MountCommand)
@@ -77,6 +80,7 @@ func mount(cmd *cobra.Command, args []string) {
 	c.OwnerId = viper.GetInt64("owner")
 	c.Consistency = gocql.ParseConsistency(viper.GetString("consistency"))
 	c.Environment = viper.GetString("environment")
+	c.FcacheDuration = fcache_ttl
 	err := c.Init()
 	if err != nil {
 		log.Println("Could not initialize cluster connection:", err)

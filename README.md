@@ -22,17 +22,19 @@ To stop it run `fusermout -u <moutnpoint>`
 The options are:
 ```
   -debug
-    	Turn on debugging
+        Turn on debugging
   -entry_ttl float
-    	fuse entry cache TTL. (default 1)
+        fuse entry cache TTL. (default 1)
   -environment string
-    	Environment to mount (default "prod")
+        Environment to mount (default "prod")
   -keyspace string
-    	Keyspace to use for the filesystem (default "cassfs")
+        Keyspace to use for the filesystem (default "cassfs")
   -mount string
-    	Mount directory (default "./")
+        Mount directory (default "./")
   -negative_ttl float
-    	fuse negative entry cache TTL. (default 1)
+        fuse negative entry cache TTL. (default 1)
+  -fcache_ttl
+        Seconds to keep local cache of files and metadata, defaults to 60 seconds
   -owner int
     	ID of the FS owner (default 1)
   -server string
