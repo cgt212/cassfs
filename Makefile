@@ -1,10 +1,6 @@
 MAIN_PACKAGE := cassfs
 GO_LINUX := GOOS=linux GOARCH=amd64
 GO_OSX := GOOS=darwin GOARCH=amd64
-BUILT_ON := $(shell date)
-COMMIT_HASH := $(shell git log -n 1 --pretty=format:"%H")
-LDFLAGS := '-X "main.BuiltOn=$(BUILT_ON)" -X "main.CommitHash=$(COMMIT_HASH)" -s -w'
-
 
 export GO15VENDOREXPERIMENT=1
 
@@ -13,11 +9,11 @@ test:
 
 osx:
 	go generate ./...
-	$(GO_OSX) go build -o cassfs -ldflags $(LDFLAGS) .
+	$(GO_OSX) go build -o cassfs
 
 linux:
 	go generate ./...
-	$(GO_LINUX) go build -o cassfs -ldflags $(LDFLAGS) .
+	$(GO_LINUX) go build -o cassfs
 
 clean:
 	find . -name *_gen.go -type f -exec rm {} \;
@@ -25,7 +21,4 @@ clean:
 
 run:
 	go generate ./...
-	go run -ldflags $(LDFLAGS) main.go
-
-fmt:
-	go fmt ./...
+	go run main.go
