@@ -15,28 +15,18 @@ To be able to run something like drupal or wordpress in a container without havi
 
 This is how I have been testing it, running an apache/php container and drupal from the file system.  
 
-Start it with `cassfs [options]`
+Start it with `cassfs [options] <mountpoint>`
 
 To stop it run `fusermout -u <moutnpoint>`
-
 The options are:
 ```
-  -debug
-    	Turn on debugging
-  -entry_ttl float
-    	fuse entry cache TTL. (default 1)
-  -environment string
-    	Environment to mount (default "prod")
-  -keyspace string
-    	Keyspace to use for the filesystem (default "cassfs")
-  -mount string
-    	Mount directory (default "./")
-  -negative_ttl float
-    	fuse negative entry cache TTL. (default 1)
-  -owner int
-    	ID of the FS owner (default 1)
-  -server string
-    	Cassandra server to connect to (default "localhost")
+-debug=false: Turn on debugging
+-entry_ttl=1: fuse entry cache TTL.
+-environment="prod": Environment to mount
+-keyspace="test": Keyspace to use for the filesystem
+-negative_ttl=1: fuse negative entry cache TTL.
+-owner=1: ID of the FS owner
+-server="localhost": Cassandra server to connect to
 ```
 
 ####Example Usage with Local Caching
@@ -44,26 +34,6 @@ The options are:
 
 In my testing on CentOS, you need to be sure to run this to allow docker to be able to read from a fuse mount
 `setsebool virt_use_fusefs true`
-
-####Build
-
-**Requires Go 1.6**
-	
-	# Glide - Update a project's dependencies
-	glide update
-	
-	# Build binary for OS X
-	make osx
-
-	#Build binary for Linux
-	make linux
-
-####Local Test Env
-
-	docker-compose up -d
-	make linux
-	docker-compose exec cassandra cqlsh -f /opt/cassfs.cql
-	./cassfs -mount /opt -keyspace cassfs
 
 ####Todo
 This is still very early on, so there are surely many thing that I have not even thought of.  This list is really too long to get right on the first pass, but here are a few of the things.
