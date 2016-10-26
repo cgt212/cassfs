@@ -41,7 +41,7 @@ type CassFsOptions struct {
 
 type CassFs struct {
 	pathfs.FileSystem
-	Mount     string
+	Mount     *string
 	cacheLock sync.RWMutex
 	fileCache map[string]*CassFileData
 	store     *Cass
@@ -207,6 +207,13 @@ func (c *CassFs) Utimens(name string, atime *time.Time, mtime *time.Time, contex
 }
 
 func (c *CassFs) Chown(name string, uid uint32, gid uint32, context *fuse.Context) fuse.Status {
+	log.Println("Changing ownership of \"" + name + "\"")
+	if name == "" {
+		log.Println("Changing ownership of root mountpoint")
+		c.options.Owner.Uid = uid
+		c.options.Owner.Gid = gid
+		return fuse.OK
+	}
 	meta, err := c.store.GetFiledata(name)
 	if err != nil {
 		log.Println("Error getting (%s) metadata: %s", name, err)
@@ -228,6 +235,12 @@ func (c *CassFs) Chown(name string, uid uint32, gid uint32, context *fuse.Contex
 
 func (c *CassFs) Chmod(name string, mode uint32, context *fuse.Context) fuse.Status {
 	permMask := uint32(07777)
+
+	if name == "" {
+		c.options.Mode = (c.options.Mode &^ permMask) | mode
+		return fuse.OK
+	}
+
 	meta, err := c.store.GetFiledata(name)
 	if err != nil {
 		log.Println("Could not get metadata for file:", name)
@@ -283,7 +296,7 @@ func (c *CassFs) Open(name string, flags uint32, context *fuse.Context) (nodefs.
 	if err != nil {
 		return nil, fuse.EIO
 	}
-	fd := NewFileData(name, c, mdata.Hash, data, mdata.Metadata.Attr)
+	fd := NewFileData(&name, c, mdata.Hash, data, mdata.Metadata.Attr)
 	c.cacheLock.Lock()
 	c.fileCache[name] = fd
 	c.cacheLock.Unlock()
@@ -312,7 +325,7 @@ func (c *CassFs) Create(name string, flags uint32, mode uint32, context *fuse.Co
 				log.Println("Error creating file:", err)
 				return nil, fuse.EIO
 			}
-			fd := NewFileData(name, c, []byte{}, []byte{}, &attr)
+			fd := NewFileData(&name, c, []byte{}, []byte{}, &attr)
 			c.cacheLock.Lock()
 			c.fileCache[name] = fd
 			c.cacheLock.Unlock()

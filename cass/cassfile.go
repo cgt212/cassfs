@@ -40,10 +40,11 @@ type CassFileData struct {
 	sync.Mutex
 	Fs    *CassFs
 	Refs  int32
-	Name  string
+	Name  *string
 	Data  []byte
 	Hash  []byte
 	Dirty bool
+	lign  bool
 	Attr  *fuse.Attr
 }
 
@@ -58,14 +59,14 @@ func NewFileHandle(f *CassFileData) *CassFileHandle {
 	}
 }
 
-func NewEmptyFileData(path string) *CassFileData {
+func NewEmptyFileData(path *string) *CassFileData {
 	return &CassFileData{
 		Refs:  0,
 		Dirty: true,
 	}
 }
 
-func NewFileData(path string, fs *CassFs, hash []byte, data []byte, attr *fuse.Attr) *CassFileData {
+func NewFileData(path *string, fs *CassFs, hash []byte, data []byte, attr *fuse.Attr) *CassFileData {
 	return &CassFileData{
 		Refs:  0,
 		Fs:    fs,
@@ -78,7 +79,7 @@ func NewFileData(path string, fs *CassFs, hash []byte, data []byte, attr *fuse.A
 }
 
 func (c *CassFileHandle) String() string {
-	return c.fileData.Name
+	return *c.fileData.Name
 }
 
 func (c *CassFileHandle) Chmod(mode uint32) fuse.Status {
@@ -150,7 +151,7 @@ func (c *CassFileHandle) Release() {
 	c.fileData.Refs--
 	c.fileData.Unlock()
 	if c.fileData.Refs == 0 {
-		c.fileData.Fs.Release(c.fileData.Name)
+		c.fileData.Fs.Release(*c.fileData.Name)
 	}
 	c.closed = true
 	return
