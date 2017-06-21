@@ -386,9 +386,11 @@ func (c *Cass) Read(hash []byte) ([]byte, error) {
 	var err error
 	if c.CacheEnabled {
 		err = c.cache.Get(c, string(hash), groupcache.AllocatingByteSliceSink(&data))
-	} else {
-		data, err = c.ReadData(hash)
+		if err == nil {
+			return data, err
+		}
 	}
+	data, err = c.ReadData(hash)
 	if err != nil {
 		log.Println(err)
 		return nil, err
