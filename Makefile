@@ -16,7 +16,7 @@ osx:
 	$(GO_OSX) go build -o cassfs -ldflags $(LDFLAGS) .
 
 linux:
-	go generate ./...
+	#go generate ./...
 	$(GO_LINUX) go build -o cassfs -ldflags $(LDFLAGS) .
 
 clean:

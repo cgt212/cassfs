@@ -42,5 +42,6 @@ func docker(cmd *cobra.Command, args []string) {
 		panic("Got nil back for driver")
 	}
 	handler := volume.NewHandler(driver)
-	fmt.Println(handler.ServeUnix("root", "cassfs"))
+	//fmt.Println(handler.ServeUnix("root", "cassfs"))
+	fmt.Println(handler.ServeUnix("root", 0))
 }

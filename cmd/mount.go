@@ -57,10 +57,12 @@ func init() {
 	MountCommand.Flags().Float64VarP(&negative_ttl, "negative_ttl", "n", 1.0, "fuse negative cache TTL.")
 	MountCommand.Flags().Int64VarP(&fcache_ttl, "fcache_ttl", "f", 1, "File cache TTL.")
 	MountCommand.Flags().StringVarP(&consistency, "consistency", "c", "ONE", "Consistency level to use (ANY,ONE,TWO,THREE,QUORUM,ALL,...)")
+	MountCommand.Flags().Bool("ro", false, "Mount file system as read only")
 	viper.BindPFlag("entry_ttl", MountCommand.Flags().Lookup("entry_ttl"))
 	viper.BindPFlag("negative_ttl", MountCommand.Flags().Lookup("negative_ttl"))
 	viper.BindPFlag("fcache_ttl", MountCommand.Flags().Lookup("fcache_ttl"))
 	viper.BindPFlag("consistency", MountCommand.Flags().Lookup("consistency"))
+	viper.BindPFlag("ro", MountCommand.Flags().Lookup("ro"))
 
 	RootCommand.AddCommand(MountCommand)
 }
@@ -103,6 +105,7 @@ func mount(cmd *cobra.Command, args []string) {
 		Owner: owner,
 		Mode:  mode,
 	}
+	opts.ReadOnly = viper.GetBool("ro")
 
 	fs := cass.NewCassFs(c, opts)
 	//This section is taken directly from the examples - not fully understood

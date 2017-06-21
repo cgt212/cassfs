@@ -194,6 +194,10 @@ func (c *CassFileHandle) Truncate(size uint64) fuse.Status {
 	return fuse.OK
 }
 
+func (c *CassFileHandle) Flock(flags int) fuse.Status {
+	return fuse.ENOSYS
+}
+
 func (c *CassFileHandle) Utimens(atime *time.Time, mtime *time.Time) fuse.Status {
 	c.fileData.Attr.Atime = uint64(atime.Unix())
 	c.fileData.Attr.Atimensec = uint32(atime.Nanosecond())

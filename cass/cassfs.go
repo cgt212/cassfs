@@ -22,6 +22,7 @@
 package cass
 
 import (
+	"errors"
 	"log"
 	"sync"
 	"syscall"
@@ -34,9 +35,10 @@ import (
 )
 
 type CassFsOptions struct {
-	Owner fuse.Owner
-	Mode  uint32
-	mount bool
+	Owner    fuse.Owner
+	Mode     uint32
+	ReadOnly bool
+	mount    bool
 }
 
 type CassFs struct {
@@ -79,6 +81,9 @@ func (c *CassFs) Access(name string, mode uint32, context *fuse.Context) fuse.St
 }
 
 func (c *CassFs) Rename(oldName string, newName string, context *fuse.Context) fuse.Status {
+	if c.options.ReadOnly {
+		return fuse.EROFS
+	}
 	_, status := c.GetAttr(oldName, context)
 	if status != fuse.OK {
 		return status
@@ -125,6 +130,9 @@ func (c *CassFs) GetAttr(name string, context *fuse.Context) (*fuse.Attr, fuse.S
 
 // This is the start of the FS Interface implementation
 func (c *CassFs) Link(orig string, newName string, context *fuse.Context) fuse.Status {
+	if c.options.ReadOnly {
+		return fuse.EROFS
+	}
 	err := c.store.CopyFile(orig, newName)
 	if err != nil {
 		return -1
@@ -133,6 +141,9 @@ func (c *CassFs) Link(orig string, newName string, context *fuse.Context) fuse.S
 }
 
 func (c *CassFs) Rmdir(path string, context *fuse.Context) fuse.Status {
+	if c.options.ReadOnly {
+		return fuse.EROFS
+	}
 	data, err := c.store.GetFiledata(path)
 	if err != nil {
 		log.Println("Unable to get information for %s: %s", path, err)
@@ -157,6 +168,9 @@ func (c *CassFs) Rmdir(path string, context *fuse.Context) fuse.Status {
 }
 
 func (c *CassFs) Mkdir(path string, mode uint32, context *fuse.Context) fuse.Status {
+	if c.options.ReadOnly {
+		return fuse.EROFS
+	}
 	_, err := c.store.GetFiledata(path)
 	if err == nil {
 		return fuse.Status(syscall.EEXIST)
@@ -170,6 +184,9 @@ func (c *CassFs) Mkdir(path string, mode uint32, context *fuse.Context) fuse.Sta
 }
 
 func (c *CassFs) Symlink(pointedTo string, linkName string, context *fuse.Context) fuse.Status {
+	if c.options.ReadOnly {
+		return fuse.EROFS
+	}
 	ctime := time.Now()
 	attr := fuse.Attr{
 		Mode:      fuse.S_IFLNK | 0777,
@@ -185,10 +202,16 @@ func (c *CassFs) Symlink(pointedTo string, linkName string, context *fuse.Contex
 }
 
 func (c *CassFs) Truncate(path string, size uint64, context *fuse.Context) fuse.Status {
+	if c.options.ReadOnly {
+		return fuse.EROFS
+	}
 	return fuse.EINVAL
 }
 
 func (c *CassFs) Utimens(name string, atime *time.Time, mtime *time.Time, context *fuse.Context) fuse.Status {
+	if c.options.ReadOnly {
+		return fuse.EROFS
+	}
 	meta, err := c.store.GetFiledata(name)
 	if err != nil {
 		log.Println("Error getting (%s) metadata: %s", name, err)
@@ -207,6 +230,9 @@ func (c *CassFs) Utimens(name string, atime *time.Time, mtime *time.Time, contex
 }
 
 func (c *CassFs) Chown(name string, uid uint32, gid uint32, context *fuse.Context) fuse.Status {
+	if c.options.ReadOnly {
+		return fuse.EROFS
+	}
 	log.Println("Changing ownership of \"" + name + "\"")
 	if name == "" {
 		log.Println("Changing ownership of root mountpoint")
@@ -234,6 +260,9 @@ func (c *CassFs) Chown(name string, uid uint32, gid uint32, context *fuse.Contex
 }
 
 func (c *CassFs) Chmod(name string, mode uint32, context *fuse.Context) fuse.Status {
+	if c.options.ReadOnly {
+		return fuse.EROFS
+	}
 	permMask := uint32(07777)
 
 	if name == "" {
@@ -257,6 +286,9 @@ func (c *CassFs) Chmod(name string, mode uint32, context *fuse.Context) fuse.Sta
 }
 
 func (c *CassFs) Unlink(name string, context *fuse.Context) fuse.Status {
+	if c.options.ReadOnly {
+		return fuse.EROFS
+	}
 	err := c.store.DeleteFile(name)
 	if err != nil {
 		return fuse.EIO
@@ -274,6 +306,9 @@ func (c *CassFs) Readlink(name string, context *fuse.Context) (string, fuse.Stat
 }
 
 func (c *CassFs) FlushFile(fd *CassFileData) error {
+	if c.options.ReadOnly {
+		return errors.New("Read-Only filesystem")
+	}
 	return c.store.UpdateFile(fd)
 }
 
@@ -314,6 +349,9 @@ func (c *CassFs) Release(name string) {
 
 //This needs to be fixed
 func (c *CassFs) Create(name string, flags uint32, mode uint32, context *fuse.Context) (nodefs.File, fuse.Status) {
+	if c.options.ReadOnly {
+		return nil, fuse.EROFS
+	}
 	_, err := c.store.GetFiledata(name)
 	if err != nil {
 		if err == gocql.ErrNotFound {
