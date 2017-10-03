@@ -1,6 +1,7 @@
 package driver
 
 import (
+	"errors"
 	"fmt"
 	"github.com/coreos/go-systemd/dbus"
 	"github.com/docker/go-plugins-helpers/volume"
@@ -46,7 +47,6 @@ type CassFsDriver struct {
 }
 
 func NewCassFsDriver(config *DriverConfig) *CassFsDriver {
-	fmt.Printf("[CassFS Driver] Creating CassFS Driver with config:\n%+v\n", config)
 	db, err := NewVolumeDb(config)
 	if err != nil {
 		fmt.Printf("Unable to open DB: %s\n", err)
@@ -70,8 +70,6 @@ func NewCassFsDriver(config *DriverConfig) *CassFsDriver {
 		return nil
 	}
 
-	fmt.Printf("Creating driver with config: \n%v\n", config)
-
 	driver := &CassFsDriver{
 		config:  config,
 		db:      db,
@@ -93,17 +91,14 @@ func NewCassFsDriver(config *DriverConfig) *CassFsDriver {
 	return driver
 }
 
-func (c *CassFsDriver) Create(r volume.Request) volume.Response {
-	fmt.Printf("Entering Create - %+v\n", r)
+func (c *CassFsDriver) Create(r *volume.CreateRequest) error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	return c.create(r)
+	return nil
 }
 
-func (c *CassFsDriver) create(r volume.Request) volume.Response {
-	fmt.Printf("Entering create - %+v\n", r)
-	fmt.Printf("Docker request for volume named: %s\n", r.Name)
+func (c *CassFsDriver) create(r volume.CreateRequest) error {
 
 	// Try to find the mount to see if it already exists
 	// CreateVolume is idempotent, so it will return an
@@ -116,12 +111,12 @@ func (c *CassFsDriver) create(r volume.Request) volume.Response {
 
 	args := strings.Split(r.Name, ".")
 	if len(args) != 2 {
-		return volume.Response{ Err: "Volume name must be in the form of <owner>.<environment>" }
+		return errors.New("Volume name must be in the form of <owner>.<environment>")
 	}
 
 	owner, err := strconv.Atoi(args[0])
 	if err != nil {
-		return volume.Response{ Err: "Owner must be an integer value" }
+		return errors.New("Owner must be an integer value")
 	}
 
 	// Put name format verification here
@@ -129,10 +124,8 @@ func (c *CassFsDriver) create(r volume.Request) volume.Response {
 	mount, err := c.db.CreateVolume(r.Name, owner, args[1])
 	if err != nil {
 		fmt.Printf("Error attaching volume: %s\n", err)
-		return volume.Response{ Err: err.Error() }
+		return err
 	}
-
-	fmt.Printf("Volume %s has been mounted by %d clients", r.Name, mount.Clients)
 
 	if mount.Clients == 1 {
 		// This is the first mount for this name
@@ -143,31 +136,30 @@ func (c *CassFsDriver) create(r volume.Request) volume.Response {
 		err = writeUnitFile(filepath.Join(c.config.StateDir, "systemd", "cassfs-" + mount.Hash + ".service"), c.config.StateDir, mount.Hash)
 		if err != nil {
 			fmt.Printf("Error writing unit file: %s\n", err)
-			return volume.Response{ Err: err.Error() }
+			return err
 		}
 		err = c.enableSystemdUnit(filepath.Join(c.config.StateDir, "systemd", "cassfs-" + mount.Hash + ".service"))
 		if err != nil {
 			fmt.Printf("Unable to enable unit file: %s\n", err)
-			return volume.Response{ Err: err.Error() }
+			return err
 		}
 		err = c.systemd.Reload()
 		if err != nil {
 			fmt.Printf("Error on reload: %s\n", err)
-			return volume.Response{ Err: "Unable to reload systemd: " + err.Error() }
+			return errors.New("Unable to reload systemd: " + err.Error())
 		}
 	}
 
-	return volume.Response{}
+	return nil
 }
 
-func (c *CassFsDriver) Remove(r volume.Request) volume.Response {
-	fmt.Printf("Entering Remove- %+v\n", r)
+func (c *CassFsDriver) Remove(r *volume.RemoveRequest) error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
 	mount, err := c.db.DeleteVolume(r.Name)
 	if err != nil {
-		return volume.Response{ Err: err.Error() }
+		return err
 	}
 	if mount.Clients == 0 {
 		// There are no more containers using the mount, remove it
@@ -175,11 +167,10 @@ func (c *CassFsDriver) Remove(r volume.Request) volume.Response {
 		deleteEnvFile(location)
 	}
 
-	return volume.Response{}
+	return nil
 }
 
-func (c *CassFsDriver) Mount(r volume.MountRequest) volume.Response {
-	fmt.Printf("Entering Mount - %+v\n", r)
+func (c *CassFsDriver) Mount(r *volume.MountRequest) (*volume.MountResponse, error ) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -188,98 +179,91 @@ func (c *CassFsDriver) Mount(r volume.MountRequest) volume.Response {
 	mount, err := c.db.FindVolume(r.Name)
 	if err != nil {
 		fmt.Println("[Mount] Error finding volume " + r.Name)
-		return volume.Response{ Err: err.Error() }
+		return &volume.MountResponse{}, err
 	}
 	if mount == nil {
-		resp := c.create(volume.Request{ Name: r.Name, Options: nil })
-		if resp.Err != "" {
-			return resp
+		err := c.create(volume.CreateRequest{ Name: r.Name, Options: nil })
+		if err != nil {
+			return &volume.MountResponse{}, err
 		}
 	}
 
 	mount, err = c.db.MountVolume(r.Name)
 	if err != nil {
-		return volume.Response{ Err: "DB Error: " + err.Error() }
+		return &volume.MountResponse{}, errors.New("DB Error: " + err.Error())
 	}
 
 	err = os.MkdirAll(mount.Location, 0755)
 	if err != nil {
-		return volume.Response{ Err: "Mkdir Error: " + err.Error() }
+		return &volume.MountResponse{}, errors.New("Mkdir Error: " + err.Error())
 	}
 	err = c.startService(mount.Hash)
 	if err != nil {
-		return volume.Response{ Err: "Service Error: " + err.Error() }
+		return &volume.MountResponse{}, errors.New("Service Error: " + err.Error())
 	}
-	return volume.Response{ Mountpoint: mount.Location }
+	return &volume.MountResponse{ Mountpoint: mount.Location }, nil
 }
 
-func (c *CassFsDriver) Unmount(r volume.UnmountRequest) volume.Response {
-	fmt.Printf("Entering Unmount - %+v\n", r)
+func (c *CassFsDriver) Unmount(r *volume.UnmountRequest) error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
 	mount, err := c.db.FindVolume(r.Name)
 	if err != nil {
-		return volume.Response{ Err: err.Error() }
+		return err
 	}
 	err = c.stopService(mount.Hash)
 	if err != nil {
-		return volume.Response{ Err: err.Error() }
+		return err
 	}
 	_, err = c.db.UnmountVolume(r.Name)
 	if err != nil {
-		return volume.Response{ Err: err.Error() }
+		return err
 	}
 	err = os.Remove(mount.Location)
 	if err != nil {
-		return volume.Response{ Err: err.Error() }
+		return err
 	}
 	err = c.stopService(mount.Hash)
 	if err != nil {
-		return volume.Response{ Err: err.Error() }
+		return err
 	}
-	return volume.Response{}
+	return nil
 }
 
 
-func (c *CassFsDriver) Path(r volume.Request) volume.Response {
-	fmt.Printf("[Path] Request: %+v\n", r)
+func (c *CassFsDriver) Path(r *volume.PathRequest) (*volume.PathResponse, error) {
 	mount, err := c.db.FindVolume(r.Name)
 	if err != nil {
 		fmt.Printf("Returning that there was an error finding the volume: %s\n", err)
-		return volume.Response{ Err: err.Error() }
+		return &volume.PathResponse{}, err
 	}
 
 	if mount == nil {
 		fmt.Println("Returning that this is an unknown volume")
-		return volume.Response{}
+		return &volume.PathResponse{}, errors.New("Unknown volume")
 	}
-	fmt.Println("Returning location: " + mount.Location)
 
-	return volume.Response{ Mountpoint: mount.Location }
+	return &volume.PathResponse{ Mountpoint: mount.Location }, nil
 }
 
-func (c *CassFsDriver) Get(r volume.Request) volume.Response {
-	fmt.Printf("Entering Get - %+v\n", r)
-	fmt.Printf("[Get] Request: %+v\n", r)
+func (c *CassFsDriver) Get(r *volume.GetRequest) (*volume.GetResponse, error) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
 	mount, err := c.db.FindVolume(r.Name)
 	if err != nil {
-		return volume.Response{ Err: err.Error() }
+		return &volume.GetResponse{}, err
 	}
 
 	if mount == nil {
-		return volume.Response{}
+		return &volume.GetResponse{}, errors.New("Unknown volume")
 	}
 
-	return volume.Response{ Volume: &volume.Volume{ Name: mount.Name, Mountpoint: mount.Location } }
+	return &volume.GetResponse{ Volume: &volume.Volume{ Name: mount.Name, Mountpoint: mount.Location } }, nil
 }
 
-func (c *CassFsDriver) List(r volume.Request) volume.Response {
-	fmt.Printf("Entering List - %+v\n", r)
-	fmt.Printf("[List] Request: %+v\n", r)
+func (c *CassFsDriver) List() (*volume.ListResponse, error) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -287,20 +271,19 @@ func (c *CassFsDriver) List(r volume.Request) volume.Response {
 
 	mounts, err := c.db.GetAll()
 	if err != nil {
-		return volume.Response{ Err: err.Error() }
+		return &volume.ListResponse{}, err
 	}
 
 	for _, mount := range mounts {
 		volumes = append(volumes, &volume.Volume{ Name: mount.Name, Mountpoint: mount.Location })
 	}
-	return volume.Response{ Volumes: volumes }
+	return &volume.ListResponse{ Volumes: volumes }, nil
 }
 
-func (c *CassFsDriver) Capabilities(r volume.Request) volume.Response {
-	fmt.Printf("Entering Capabilities - %+v\n", r)
-	var resp volume.Response
+func (c *CassFsDriver) Capabilities() *volume.CapabilitiesResponse {
+	var resp volume.CapabilitiesResponse
 	resp.Capabilities = volume.Capability{ Scope: "local" }
-	return resp
+	return &resp
 }
 
 func (c *CassFsDriver) enableSystemdUnit(path string) error {
